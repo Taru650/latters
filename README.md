@@ -139,3 +139,20 @@ python -m pytest tests/ -q      # 44 tests
   logical-stream extractor such as `krutiextract`.
 - Digit mapping assumes Kruti Dev renders ASCII digits as Devanagari digits.
   Use `--latin-digits` if your archive was typed otherwise.
+
+### Phase 0 outputs are tracked, not ignored
+
+`docs/probe.txt` and `docs/BASELINE.md` are committed deliberately. They are
+the evidence behind every hardware-dependent decision in the plan — model
+tier, `num_thread`, whether the discrete GPU takes batched embedding, whether
+RAM and an SSD get bought. Re-run and re-commit them after any hardware,
+driver or Ollama change, so a later disagreement about "why did we pick this
+model" is settled by a file rather than by memory.
+
+To get them off the office machine and into the repo:
+
+```
+git add -f docs/probe.txt docs/BASELINE.md
+git commit -m "Phase 0: baseline measurements from <machine>"
+git push
+```

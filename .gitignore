@@ -6,6 +6,4 @@ dist/
 .pytest_cache/
 .venv/
 venv/
-docs/probe.txt
-docs/BASELINE.md
 converted/
