@@ -40,19 +40,34 @@ piece of silicon should get the stage it is actually good at:
 | Stage | Bottleneck | Assign to | Rationale |
 |---|---|---|---|
 | Legacy-font conversion, segmentation | Single-thread string ops | **CPU, 4 worker processes** | Embarrassingly parallel across files |
-| OCR (scanned pages only) | Conv/GEMM, batched | **GPU 1 (AMD) via DirectML** | Compute-bound, fits in 4 GB easily |
-| **Bulk embedding at ingest** (10k–100k chunks) | GEMM, large batch | **GPU 1 (AMD) via ONNX Runtime DirectML** | ≈650 GFLOPS vs ≈190 GFLOPS AVX2 → real ~3× win; 97M encoder is ~200 MB in VRAM |
-| Query-time embedding (batch = 1) | Dispatch latency | **CPU** | GPU kick-off cost exceeds the compute |
-| Cross-encoder rerank (5–20 pairs) | Small GEMM | **GPU 0 (Intel UHD 620) via DirectML** | Keeps the AMD card and CPU free; overlaps with LLM prefill |
+| OCR (scanned pages only) | Conv/GEMM, batched | **CPU** | See the measured note below — neither GPU beats the CPU here |
+| Bulk embedding at ingest | GEMM, large batch | **CPU (ONNX Runtime, int8)** | Measured 272 GFLOP/s on AVX2 FMA, against 132 on the AMD card and 67 on the Intel iGPU |
+| Query-time embedding (batch = 1) | Dispatch latency | **CPU** | Same runtime, already warm |
+| Cross-encoder rerank (5–20 pairs) | Small GEMM | **CPU**, or skip in v1 | Hybrid BM25+dense with RRF is usually enough at a few thousand letters |
 | BM25 / FTS5 lexical search | Disk + CPU | **CPU + SSD-cached index** | Must not touch the HDD hot path |
-| LLM prefill (prompt processing) | GEMM, batched | **CPU** (optionally Vulkan — measure) | Only stage where GPU offload *might* pay; prove it with `llama-bench` |
-| LLM decode (token generation) | RAM bandwidth | **CPU, 4 threads** | GPU is strictly worse here |
+| LLM prefill (prompt processing) | GEMM, batched | **CPU** | Vulkan offload measured as not worth it; see Phase 0 |
+| LLM decode (token generation) | RAM bandwidth | **CPU, 4 threads** | Bandwidth-bound; no GPU here has faster memory than system RAM |
 | DOCX/PDF export | CPU | **CPU** | Trivial |
 
-This gives you real concurrency: while the LLM is decoding a draft on 4 CPU threads, the AMD card
-can be re-embedding a freshly uploaded batch of archive files and the Intel iGPU can be reranking
-for the next query. That is a genuinely distributed load — and none of it degrades the thing
-users actually feel (time-to-first-token).
+> **Measured, 2026-09: both GPUs lose.** An i7-8550U running AVX2 *FMA* does
+> ~272 GFLOP/s through ONNX Runtime's MLAS kernels. The AMD R7 M4xx returned
+> 132 (0.48×) and the Intel UHD 620 returned 67 (0.25×). The earlier version of
+> this plan predicted the AMD card would win by 2–3× and assigned bulk
+> embedding to it; that was wrong in both directions — the CPU was
+> underestimated by 2× (FMA was not counted) and the GPU overestimated by 5×
+> (GCN mobile parts reach ~20% of paper peak on generic DirectML kernels).
+> Full numbers and the methodology caveat: [`PHASE0_FINDINGS.md`](PHASE0_FINDINGS.md).
+>
+> **Consequence: this is a CPU-only design.** That is simpler, not worse — one
+> runtime, no `onnxruntime-directml` dependency, no DirectML failure modes. The
+> concurrency that remains is process-level: ingest workers and the LLM are
+> separate processes with an explicit thread budget between them, and ingest is
+> queued so it never overlaps interactive drafting.
+
+The concurrency that survives measurement is process-level rather than device-level: conversion
+and segmentation workers saturate all four cores during ingest, while interactive drafting holds a
+semaphore that keeps exactly one LLM generation running and defers ingest until it finishes. The
+thing users feel — time-to-first-token — is protected by scheduling, not by offloading.
 
 ### The bigger constraint nobody mentioned
 

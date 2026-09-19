@@ -116,7 +116,64 @@ than fatal. We are optimising for this machine.
 
 ---
 
-## 5. DirectML — still unmeasured, blocked by a harness bug (now fixed)
+## 5. Both GPUs lose to the CPU — the plan's GPU assignment is dead
+
+`matmul 1024×1024, 20 iterations, onnxruntime 1.24.4, IR 9`:
+
+| Device | Time | Throughput | vs CPU |
+|---|---:|---:|---:|
+| **CPU** (i7-8550U, AVX2) | 7.9 ms | **272.7 GFLOP/s** | — |
+| DirectML `device_id=1` (AMD R7 M4xx) | 16.3 ms | 132.0 GFLOP/s | **0.48×** |
+| DirectML `device_id=0` (Intel UHD 620) | 32.1 ms | 67.0 GFLOP/s | **0.25×** |
+
+**Prediction that was wrong:** the plan asserted the discrete GPU would beat
+the CPU by 2–3× on this workload, and assigned bulk embedding to it on that
+basis. It loses by 2×. Two errors compounded:
+
+1. **The CPU was underestimated by 2×.** The plan figured ~190 GFLOP/s from
+   "4 cores × 16 FLOP/cycle × 3 GHz", which does not count AVX2 *FMA*. With
+   FMA it is 32 FLOP/cycle/core: 4 × 32 × ~2.1 GHz ≈ 269 GFLOP/s, which is
+   almost exactly what ONNX Runtime's MLAS kernels delivered.
+2. **The GPU was overestimated by 5×.** 320 shaders × 2 × 1021 MHz gives
+   ~650 GFLOP/s on paper; it returned 132, about 20% of peak. GCN mobile parts
+   are register-starved with small caches, and DirectML's generic kernels are
+   not tuned for a 2016 low-end part on a legacy driver.
+
+### Methodological caveat, and what was done about it
+
+The original benchmark shipped three 4 MB tensors over PCIe every iteration,
+which a real encoder never does — its weights stay resident in VRAM and only
+token ids go in and a few hundred floats come out. That penalises the GPU for
+transfer it would not pay in production.
+
+`phase0_directml.py` now also measures with **device-resident I/O binding**,
+which keeps the operands on the device across iterations and isolates compute
+from transfer. Re-run to see whether the 132 GFLOP/s was transfer-limited or
+genuinely compute-limited. Unless the device-I/O row roughly doubles, the
+conclusion below stands.
+
+### Decision: embeddings run on the CPU
+
+| | |
+|---|---|
+| Runtime | ONNX Runtime, `CPUExecutionProvider` |
+| Model | `granite-embedding-97m-multilingual-r2` (ONNX, int8 dynamic) |
+| Dependency dropped | `onnxruntime-directml` — plain `onnxruntime` is enough |
+
+[Guessing] Projected ingest rate: a 97M encoder over ~512 tokens is roughly
+99 GFLOP per letter; at a realistic 40–60% of the measured 272 GFLOP/s that is
+~1.3–1.6 letters/s, so a 5,000-letter first ingest lands near **45–60 minutes**,
+or ~30 with int8. Against the 0.42 chunks/s measured through Ollama, that is a
+3–4× improvement *and* one less runtime.
+
+**The one case that could still justify the GPU** is concurrency, not speed:
+work placed there costs the LLM no CPU threads. That only matters if embedding
+must run *while* someone is drafting. Queuing ingest to run when nobody is
+drafting — which the plan's single-generation semaphore already implies — is
+simpler and faster. Keep DirectML as a documented optional optimisation, not a
+v1 dependency.
+
+### Bug that blocked the first attempt
 
 ```
 Unsupported model IR version: 14, max supported IR version: 13
@@ -124,12 +181,8 @@ Unsupported model IR version: 14, max supported IR version: 13
 
 Every provider failed, **including CPU** — which is how you tell a graph
 problem from a GPU or driver problem. Recent `onnx` releases emit IR 14 by
-default; the installed `onnxruntime` accepts at most 13. Nothing about a
-single matmul needs IR 14.
-
-Fixed in `scripts/phase0_directml.py`: the graph is now built at the highest IR
-version the local onnxruntime will actually load (tries 9, 10, 8, 7), and the
-accepted version is printed. Re-run to get the numbers.
+default; the installed `onnxruntime` accepted at most 13. Fixed: the graph is
+now built at the highest IR version the local runtime actually loads.
 
 ---
 
@@ -140,5 +193,6 @@ accepted version is printed. Re-run to get the numbers.
 - [x] **Do not run the embedder in Ollama.** Split runtime confirmed by a 107× measured regression.
 - [x] **`keep_alive: -1`** is mandatory, not an optimisation.
 - [ ] **Buy: 1 × 8 GB DDR4-2400 SODIMM (slot A) + a SATA/NVMe SSD.** Together they address bandwidth, capacity and load time — the three things every measurement above is limited by.
-- [ ] DirectML device comparison — re-run the fixed script.
+- [x] **DirectML: rejected.** Both GPUs lose to the CPU (0.48× and 0.25×). Embeddings run on the CPU via plain `onnxruntime`; the `onnxruntime-directml` dependency is dropped.
+- [ ] Re-run `phase0_directml.py` for the device-I/O rows, to confirm the GPU deficit is compute and not PCIe transfer.
 - [ ] `num_thread` sweep — not yet reported.

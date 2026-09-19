@@ -62,7 +62,42 @@ def build_loadable_model() -> tuple[bytes, int]:
     raise RuntimeError(f"no IR version in {_IR_CANDIDATES} loaded: {last}")
 
 
-def bench(model: bytes, providers, label: str) -> None:
+def _run_plain(sess, a, b):
+    sess.run(None, {"A": a, "B": b})
+
+
+def _bind_on_device(sess, a, b, device: str):
+    """Keep both operands resident on the device across iterations.
+
+    Without this the benchmark ships 3 x 4 MB over PCIe on every iteration,
+    which on a x4-linked mobile card is milliseconds of pure transfer against
+    a ~16 ms kernel -- and it penalises the GPU for something a real encoder
+    never does. An encoder's weights stay in VRAM; only token ids go in and a
+    few hundred floats come out. Returns a callable, or None if this build
+    cannot place tensors on the device.
+    """
+    try:
+        oa = ort.OrtValue.ortvalue_from_numpy(a, device, 0)
+        ob = ort.OrtValue.ortvalue_from_numpy(b, device, 0)
+        oy = ort.OrtValue.ortvalue_from_shape_and_type((N, N), np.float32, device, 0)
+        io = sess.io_binding()
+        io.bind_ortvalue_input("A", oa)
+        io.bind_ortvalue_input("B", ob)
+        io.bind_ortvalue_output("Y", oy)
+    except Exception:
+        return None
+
+    def _run():
+        sess.run_with_iobinding(io)
+
+    try:
+        _run()
+    except Exception:
+        return None
+    return _run
+
+
+def bench(model: bytes, providers, label: str, *, device: str | None = None) -> None:
     try:
         sess = ort.InferenceSession(model, providers=providers)
     except Exception as exc:
@@ -71,14 +106,18 @@ def bench(model: bytes, providers, label: str) -> None:
     rng = np.random.default_rng(0)
     a = rng.standard_normal((N, N), dtype=np.float32)
     b = rng.standard_normal((N, N), dtype=np.float32)
-    sess.run(None, {"A": a, "B": b})  # warm up: first run includes compilation
-    t0 = time.perf_counter()
-    for _ in range(ITERS):
-        sess.run(None, {"A": a, "B": b})
-    dt = (time.perf_counter() - t0) / ITERS
-    gflops = 2 * N**3 / dt / 1e9
-    print(f"  {label:28} {dt*1000:8.1f} ms   {gflops:7.1f} GFLOP/s   "
-          f"({sess.get_providers()[0]})")
+
+    for mode, runner in (("host I/O", lambda: _run_plain(sess, a, b)),
+                         ("device I/O", _bind_on_device(sess, a, b, device) if device else None)):
+        if runner is None:
+            continue
+        runner()  # warm up: the first run includes kernel compilation
+        t0 = time.perf_counter()
+        for _ in range(ITERS):
+            runner()
+        dt = (time.perf_counter() - t0) / ITERS
+        print(f"  {label:24} {mode:11} {dt*1000:8.1f} ms   "
+              f"{2 * N**3 / dt / 1e9:7.1f} GFLOP/s")
 
 
 class _Tee:
@@ -130,16 +169,31 @@ def main() -> int:
     bench(model, ["CPUExecutionProvider"], "CPU")
     for device_id in (0, 1):
         bench(model, [("DmlExecutionProvider", {"device_id": device_id})],
-              f"DirectML device_id={device_id}")
+              f"DirectML device_id={device_id}", device="dml")
 
     print("""
 How to read this
-  Device ids follow the order in Task Manager (GPU 0, GPU 1). Expect the
-  discrete AMD card to beat the CPU here by roughly 2-3x: this workload is
-  compute-bound, which is exactly why bulk embedding at ingest is assigned to
-  it. Do NOT conclude anything about LLM token generation from this number --
-  that is memory-bandwidth-bound, where the same card is ~2.7x SLOWER than
-  system RAM.
+  Device ids follow the order in Task Manager (GPU 0, GPU 1).
+
+  Compare the "device I/O" rows, not "host I/O": the host rows include a
+  PCIe round-trip of three 4 MB tensors per iteration, which a real encoder
+  does not pay because its weights stay resident in VRAM.
+
+  A GPU only earns the extra runtime if it clearly beats the CPU row. An
+  i7-8550U doing AVX2 FMA is roughly 270 GFLOP/s, which is more than a
+  low-end GCN mobile part delivers in practice -- so "CPU wins" is a normal
+  and perfectly good outcome here, not a misconfiguration. It means one
+  runtime instead of two.
+
+  Even a GPU that loses on raw throughput can still be worth it for
+  *concurrency*: work placed there costs the LLM no CPU threads. That only
+  matters if embedding has to run while someone is drafting. If ingest can be
+  queued to run when nobody is drafting, take the faster device and keep the
+  stack simple.
+
+  Do NOT conclude anything about LLM token generation from these numbers --
+  that is memory-bandwidth-bound, where this card's DDR3 (~14 GB/s) loses to
+  system RAM regardless.
 
   If a device is UNAVAILABLE, check its driver in the probe output. On GCN-era
   Radeons you may need the last legacy Adrenalin release for the family.""")
