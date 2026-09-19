@@ -5,13 +5,18 @@ Target machine (from supplied screenshots):
 | Component | Value | Consequence |
 |---|---|---|
 | CPU | Intel Core i7-8550U, 4C/8T, base 1.99 GHz, boost 3.93 GHz, 8 MB L3, 15 W cTDP | AVX2 only (no AVX-512, no AMX). Sustained clocks collapse under load. |
-| RAM | 8.00 GB DDR4-2400 | **The binding constraint.** 4.9/7.9 GB already in use at idle → ~3.0 GB free. |
+| RAM | 8.00 GB DDR4-2400, **1 module, single-channel (measured)** | **The binding constraint.** ~19.2 GB/s, not 38.4. ~3.0 GB free at idle. Slot A is empty. |
 | Disk 0 (C:) | 1.82 TB **HDD (RAID)**, 56 GB used, sitting at **100 % active time** | Model load, mmap page-in, and any swapping are catastrophic here. |
 | GPU 0 | Intel UHD 620 (iGPU) | Shares the same DDR4-2400 pool. No bandwidth advantage, some FP32 compute advantage. |
 | GPU 1 | AMD Radeon R7 M4xx, 4 GB **DDR3**, 64-bit bus | ≈ **14.4 GB/s** bandwidth, 320 shaders, ≈ 650 GFLOPS FP32. GCN, ROCm-unsupported. |
 | OS | Windows 11 | ROCm is not an option. DirectML and Vulkan are. |
 
 ---
+
+> **Phase 0 has now been run on the machine. See
+> [`PHASE0_FINDINGS.md`](PHASE0_FINDINGS.md) for measured results, including one
+> prediction in this document that was wrong (RAM was assumed possibly
+> dual-channel; it is single-channel).**
 
 ## 0. The premise that has to be corrected first
 
@@ -20,10 +25,10 @@ Target machine (from supplied screenshots):
 Token generation is *memory-bandwidth-bound*, not compute-bound: every decoded token reads the
 entire active weight set once.
 
-- System RAM: DDR4-2400 dual-channel ≈ **38.4 GB/s** (≈ 19.2 GB/s if only one SODIMM is fitted — verify this first, see Phase 0).
+- System RAM: **measured single-channel, ≈ 19.2 GB/s** (one 8 GB module in DIMM B; a matched module in slot A would take it to ≈ 38.4 GB/s).
 - R7 M4xx VRAM: DDR3, 64-bit, ~900 MHz ≈ **14.4 GB/s**.
 
-The discrete GPU's memory is **~2.7× slower than the CPU's**. Any layer offloaded there decodes
+The discrete GPU's memory is slower than system RAM even single-channel (14.4 vs 19.2 GB/s), and ~2.7× slower once the second SODIMM is fitted. Any layer offloaded there decodes
 slower than it would have on the CPU, and you additionally pay PCIe round-trips per token.
 `--n-gpu-layers 20` on this laptop is a downgrade. This is the well-documented failure mode where
 partial offload to a weak card underperforms CPU-only.

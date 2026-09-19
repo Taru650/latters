@@ -26,7 +26,16 @@ N = 1024
 ITERS = 20
 
 
-def make_model() -> bytes:
+#: ONNX Runtime refuses a graph whose IR version exceeds what it was built
+#: against. Recent `onnx` releases default to IR 14, while the onnxruntime
+#: wheels in circulation top out at 10-13, so a freshly built graph fails to
+#: load on *every* provider -- including CPU, which is how you tell this apart
+#: from a GPU or driver problem. Nothing about the model needs IR 14, so it is
+#: pinned down and retried.
+_IR_CANDIDATES = (9, 10, 8, 7)
+
+
+def make_model(ir_version: int) -> bytes:
     """A single big matmul -- the shape of work an embedding encoder does."""
     from onnx import TensorProto, helper
 
@@ -36,7 +45,21 @@ def make_model() -> bytes:
     node = helper.make_node("MatMul", ["A", "B"], ["Y"])
     graph = helper.make_graph([node], "bench", [a, b], [y])
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    model.ir_version = ir_version
     return model.SerializeToString()
+
+
+def build_loadable_model() -> tuple[bytes, int]:
+    """Build the graph at the highest IR version this onnxruntime accepts."""
+    last = None
+    for ir in _IR_CANDIDATES:
+        blob = make_model(ir)
+        try:
+            ort.InferenceSession(blob, providers=["CPUExecutionProvider"])
+            return blob, ir
+        except Exception as exc:
+            last = exc
+    raise RuntimeError(f"no IR version in {_IR_CANDIDATES} loaded: {last}")
 
 
 def bench(model: bytes, providers, label: str) -> None:
@@ -92,10 +115,17 @@ def main() -> int:
         return 1
 
     try:
-        model = make_model()
+        model, ir = build_loadable_model()
     except ImportError:
         return print("pip install onnx  (needed only to build the benchmark graph)") or 1
+    except RuntimeError as exc:
+        print(f"\ncould not build a loadable graph: {exc}")
+        print("onnx and onnxruntime versions are incompatible. Either:")
+        print("  pip install 'onnx<1.17'")
+        print("  pip install --upgrade onnxruntime-directml")
+        return 1
 
+    print(f"onnx IR version accepted: {ir}   onnxruntime {ort.__version__}")
     print(f"\nmatmul {N}x{N}, {ITERS} iterations after warm-up:")
     bench(model, ["CPUExecutionProvider"], "CPU")
     for device_id in (0, 1):

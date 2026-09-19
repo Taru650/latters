@@ -58,7 +58,11 @@ def ns(v) -> float:
 def ollama_ps() -> str:
     try:
         return subprocess.run(["ollama", "ps"], capture_output=True, text=True,
-                              timeout=30).stdout.strip()
+                              timeout=90).stdout.strip()
+    except subprocess.TimeoutExpired:
+        return ("(`ollama ps` did not answer within 90s -- the server is still "
+                "paging models in or out. A timeout here is itself a result: "
+                "the machine is in disk thrash, not merely busy.)")
     except Exception as exc:
         return f"(ollama ps failed: {exc})"
 
