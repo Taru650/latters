@@ -15,12 +15,17 @@
     latters audit ARCHIVE                anchor firing and boundary diagnostics
     latters stats --db X.db              corpus health
     latters search QUERY --db X.db       lexical search over the corpus
+
+    latters fields  ARCHIVE|--db X.db    field extraction coverage
+    latters classify --db X.db           bootstrap labels, cross-validate, store
+    latters templates --db X.db          mine per-cell skeletons
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -362,6 +367,126 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+def _labelled_rows(db_path: str):
+    from .classify import bootstrap
+    from .fields import extract
+    from .store import Store
+    out = []
+    with Store(db_path) as store:
+        for row in store.db.execute("SELECT id, text FROM letters"):
+            f = extract(row["text"])
+            out.append((row["id"], row["text"], f, bootstrap(f, row["text"])))
+    return out
+
+
+def cmd_fields(args: argparse.Namespace) -> int:
+    from .fields import extract
+
+    if args.db:
+        texts = [r[1] for r in _labelled_rows(args.db)]
+    else:
+        texts = [t for _, t in _convert_all(Path(args.path), args)]
+    if not texts:
+        print("nothing to read", file=sys.stderr)
+        return 1
+
+    tally = {k: Counter() for k in extract("").states()}
+    for text in texts:
+        for k, v in extract(text).states().items():
+            tally[k][v] += 1
+    n = len(texts)
+    print(f"field extraction over {n} letters\n")
+    print(f"  {'field':16} {'found':>7} {'blank':>7} {'absent':>7}   usable")
+    for k, c in tally.items():
+        print(f"  {k:16} {c['found']:7d} {c['blank']:7d} {c['absent']:7d}   "
+              f"{(c['found'] + c['blank']) / n:>6.0%}")
+    print("\n'blank' means the label is present with the value left to be filled")
+    print("at dispatch -- 95% of a real archive looked like that. It is a usable")
+    print("template, not a defect; 'absent' is the defect.")
+    return 0
+
+
+def cmd_classify(args: argparse.Namespace) -> int:
+    from .classify import (UNLABELLED, cross_validate, department_features,
+                           fold_rare, letter_type_features)
+    from .store import Store
+
+    rows = _labelled_rows(args.db)
+    if not rows:
+        print("no letters in that database", file=sys.stderr)
+        return 1
+
+    for name, attr, featurise in (
+        ("DEPARTMENT", "department", department_features),
+        ("LETTER TYPE", "letter_type", letter_type_features),
+    ):
+        X, y = [], []
+        for _, text, f, b in rows:
+            label = getattr(b, attr)
+            if label != UNLABELLED:
+                X.append(featurise(text, f))
+                y.append(label)
+        print(f"\n=== {name}: {len(X)}/{len(rows)} labelled ({len(X)/len(rows):.0%}) ===")
+        if len(set(y)) < 2:
+            print("   only one class present -- nothing to learn or evaluate")
+            continue
+        folded, dropped = fold_rare(y, min_support=args.min_support)
+        if dropped:
+            print(f"   folded into 'अन्य' (under {args.min_support} examples): "
+                  f"{', '.join(sorted(dropped))}")
+        print(cross_validate(X, folded, k=args.folds).render())
+
+    if args.write:
+        with Store(args.db) as store:
+            for rid, _, _, b in rows:
+                store.db.execute(
+                    "UPDATE letters SET department=?, letter_type=? WHERE id=?",
+                    (None if b.department == UNLABELLED else b.department,
+                     None if b.letter_type == UNLABELLED else b.letter_type, rid))
+            store.db.commit()
+        print(f"\nwrote bootstrapped labels to {args.db}")
+        print("These are rule-derived, not human-verified. The cross-validation")
+        print("above says how far they can be trusted.")
+    return 0
+
+
+def cmd_templates(args: argparse.Namespace) -> int:
+    from .classify import UNLABELLED
+    from .template import mine_all
+
+    rows = [(text, b.department, b.letter_type)
+            for _, text, _, b in _labelled_rows(args.db)
+            if UNLABELLED not in (b.department, b.letter_type)]
+    skeletons = mine_all(rows, min_cell=args.min_cell)
+    if not skeletons:
+        print(f"no (department, type) cell has {args.min_cell}+ letters. "
+              "A skeleton mined from fewer is just those letters' quirks.",
+              file=sys.stderr)
+        return 1
+
+    print(f"{len(rows)} labelled letters -> {len(skeletons)} cells "
+          f"with {args.min_cell}+ letters\n")
+    print(f"  {'department':14} {'type':20} {'n':>4} {'skeleton covers':>16}")
+    for s in skeletons:
+        print(f"  {s.department:14} {s.letter_type:20} {s.n_letters:4d} {s.coverage:>15.0%}")
+    print("\n'skeleton covers' is the share of a typical letter the office's own")
+    print("boilerplate already supplies. The model only has to write the rest,")
+    print("which is what makes a 1B model viable at 9 Hindi words per second.")
+
+    if args.out:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        for s in skeletons:
+            safe = re.sub(r"[^\w\u0900-\u097F]+", "_", f"{s.department}_{s.letter_type}")
+            (out / f"{safe}.md").write_text(s.render(), encoding="utf-8")
+        print(f"\nwrote {len(skeletons)} skeleton(s) to {out}")
+    if args.show:
+        print("\n" + "=" * 72 + "\n")
+        print(skeletons[0].render())
+    return 0
+
+
+# --------------------------------------------------------------------------
 def cmd_inventory(args: argparse.Namespace) -> int:
     """Phase 1.1: how much of this archive is legacy, and in which fonts?
 
@@ -574,6 +699,27 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("--limit", type=int, default=10)
     se.add_argument("--min-trust", type=float, default=0.6)
     se.set_defaults(func=cmd_search)
+
+    fl = sub.add_parser("fields", help="field extraction coverage")
+    fl.add_argument("path", nargs="?", default=None)
+    fl.add_argument("--db", default=None)
+    fl.add_argument("--latin-digits", action="store_true")
+    fl.set_defaults(func=cmd_fields)
+
+    cl = sub.add_parser("classify", help="bootstrap labels and cross-validate")
+    cl.add_argument("--db", required=True)
+    cl.add_argument("--folds", type=int, default=5)
+    cl.add_argument("--min-support", type=int, default=10)
+    cl.add_argument("--write", action="store_true",
+                    help="store the bootstrapped labels on each letter")
+    cl.set_defaults(func=cmd_classify)
+
+    tp = sub.add_parser("templates", help="mine per-cell skeletons")
+    tp.add_argument("--db", required=True)
+    tp.add_argument("--min-cell", type=int, default=8)
+    tp.add_argument("-o", "--out", default=None, help="directory to write skeletons to")
+    tp.add_argument("--show", action="store_true", help="print the largest skeleton")
+    tp.set_defaults(func=cmd_templates)
 
     inv = sub.add_parser("inventory", help="Phase 1.1 archive triage")
     inv.add_argument("path"); inv.add_argument("--json", action="store_true")

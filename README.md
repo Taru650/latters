@@ -4,10 +4,11 @@ Fully offline. No cloud API, no telemetry, nothing leaves the machine.
 
 Target hardware and the full phase plan: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
-**Status: Phase 0 measured, Phase 1 (conversion) and Phase 2 (segmentation)
-implemented and validated against a real district archive** — see
+**Status: Phase 0 measured, Phases 1-3 (conversion, segmentation,
+classification) implemented and validated against a real district archive** — see
 [`docs/PHASE0_FINDINGS.md`](docs/PHASE0_FINDINGS.md) and
-[`docs/PHASE2_FINDINGS.md`](docs/PHASE2_FINDINGS.md).
+[`docs/PHASE2_FINDINGS.md`](docs/PHASE2_FINDINGS.md) and
+[`docs/PHASE3_FINDINGS.md`](docs/PHASE3_FINDINGS.md).
 
 ---
 
@@ -73,6 +74,9 @@ latters ingest /path/to/archive --repair --rescue-latin -o ./converted
 | `anchors.py` | Structural anchors (letter number, subject, closing, …) as tunable data |
 | `segment.py` | One file → N letters; completeness and trust scoring |
 | `store.py` | SQLite corpus + FTS5 index (tokenizer configured for Devanagari) |
+| `fields.py` | Field extraction with a found / **blank** / absent distinction |
+| `classify.py` | Label bootstrapping + char-ngram Naive Bayes + honest cross-validation |
+| `template.py` | Per-cell skeleton mining — the reason a 1B model is viable |
 | `cli.py` | `inventory`, `ingest`, `fonts convert/gold/tables` |
 
 ### The three things that make this non-trivial
@@ -265,4 +269,62 @@ separators: `समीक्षा` indexes as `["सम","ष"]` and a search f
 
 ```bash
 python -m pytest tests/ -q      # 128 tests
+```
+
+
+---
+
+## Phase 3 — fields, labels, skeletons
+
+```bash
+latters fields    --db corpus.db
+latters classify  --db corpus.db --write
+latters templates --db corpus.db -o skeletons/ --show
+```
+
+### Blank is not absent
+
+Only **35 of 547 real letters carry a dispatch number**; 498 read
+`पत्रांक- --------/रा०, दिनांक--------`. The field is present and
+deliberately empty. Every field therefore has three states — `FOUND`,
+`BLANK`, `ABSENT` — because a template awaiting a number is usable and a
+letter missing one is a defect, and collapsing them loses both.
+
+### Classification: department yes, letter type no
+
+| | accuracy | baseline | lift | macro F1 | verdict |
+|---|---:|---:|---:|---:|---|
+| department | 0.936 | 0.662 | +0.274 | **0.812** | apply with a confidence gate |
+| letter type | 0.659 | 0.182 | +0.477 | 0.636 | **suggest only, user confirms** |
+
+Labels are bootstrapped from branch codes (`पत्रांक-----/रा०` → राजस्व) and
+office lines, so 95% of the corpus is labelled with no human effort.
+
+No sklearn — scipy + sklearn is ~100 MB of wheels for a machine with 3 GB
+free and no internet to install from, and char-ngram Naive Bayes is eighty
+lines of stdlib. No LLM — classifying a closed label set is the one task
+where a 1B model is strictly worse: slower, and not auditable.
+
+**Every report prints the majority baseline.** 93.6% accuracy on a label set
+that is 66% one class is not evidence of anything on its own.
+
+### Why a 1B model can do this job
+
+545 of 547 letters have a unique body, so there are no whole-letter templates.
+But line-level boilerplate is enormous, and mining it per
+(department, letter-type) cell gives:
+
+| department | type | letters | skeleton covers |
+|---|---|---:|---:|
+| बैंकिंग | जाँच | 8 | **87%** |
+| विकास | सामान्य पत्राचार | 24 | 62% |
+| राजस्व | भूमि | 79 | 36% |
+
+"Skeleton covers" is the share of the letter the model does **not** write —
+letterhead, addressee block, closing and distribution list are copied, so
+they are exactly right rather than approximately right. At 9 Hindi words per
+second, 87% coverage is a 12-second draft instead of a 90-second one.
+
+```bash
+python -m pytest tests/ -q      # 173 tests
 ```
