@@ -15,6 +15,10 @@ cold load      Seconds to read the model off disk. On a spinning disk this is
                justification for keep_alive=-1.
 prefill t/s    Prompt processing. The only stage where GPU offload might pay,
                so this is the before/after number for the Vulkan experiment.
+               Each repeat gets a unique marker prepended, because Ollama
+               caches prompt KV and an unvaried prompt makes runs 2..n report
+               physically impossible rates. Anything above PLAUSIBLE_PREFILL_TPS
+               is flagged as suspected cache reuse rather than reported.
 decode t/s     Token generation -- memory-bandwidth-bound. This is what the
                user actually waits through, and what a second SODIMM moves.
 fertility      Tokens emitted per Devanagari word. A tokenizer that costs 1.5x
@@ -39,6 +43,12 @@ import urllib.request
 from datetime import datetime, timezone
 
 HOST = "http://127.0.0.1:11434"
+
+#: Above this, a CPU-only prefill measurement is not believable on a laptop
+#: part and almost certainly reflects prompt-cache reuse. An i7-8550U does
+#: roughly 190 GFLOP/s with AVX2; a 1B Q4 model needs ~2 GFLOP per prompt
+#: token, which caps honest prefill near 100 t/s.
+PLAUSIBLE_PREFILL_TPS = 400.0
 
 #: A realistic drafting prompt: Hindi instruction, Hindi exemplar, Hindi output.
 #: Benchmarking on English prompts is how people end up surprised by Indic
@@ -116,12 +126,17 @@ def measure(model: str, prompt: str, repeats: int, threads: list[int]) -> dict:
     out["cold_load_s"] = round(ns_to_s(cold.get("load_duration")), 2)
     out["cold_wall_s"] = round(cold["_wall_s"], 2)
 
-    prefill, decode, samples = [], [], []
-    for _ in range(repeats):
-        r = generate(model, prompt)
+    prefill, decode, samples, prompt_counts = [], [], [], []
+    for i in range(repeats):
+        # Defeat the prompt KV cache: without a unique prefix, every repeat
+        # after the first reuses cached keys and reports a prefill rate that
+        # is an artefact of the cache, not of the hardware.
+        varied = f"[अनुरोध सं. {i}-{time.time_ns()}]\n" + prompt
+        r = generate(model, varied)
         pe_n, pe_d = r.get("prompt_eval_count", 0), ns_to_s(r.get("prompt_eval_duration"))
         ev_n, ev_d = r.get("eval_count", 0), ns_to_s(r.get("eval_duration"))
-        if pe_d > 0:
+        prompt_counts.append(pe_n)
+        if pe_d > 0 and pe_n > 0:
             prefill.append(pe_n / pe_d)
         if ev_d > 0:
             decode.append(ev_n / ev_d)
@@ -129,13 +144,36 @@ def measure(model: str, prompt: str, repeats: int, threads: list[int]) -> dict:
 
     last = samples[-1]
     out["prompt_tokens"] = last.get("prompt_eval_count")
-    out["prefill_tps"] = round(statistics.median(prefill), 1) if prefill else None
+    out["prompt_token_counts"] = prompt_counts
+    if prefill:
+        median_prefill = statistics.median(prefill)
+        if median_prefill > PLAUSIBLE_PREFILL_TPS:
+            out["prefill_tps"] = None
+            out["prefill_suspect"] = round(median_prefill, 1)
+            out["errors"].append(
+                f"prefill measured at {median_prefill:.0f} t/s, above the "
+                f"{PLAUSIBLE_PREFILL_TPS:.0f} t/s plausibility cap -- prompt "
+                "cache reuse, not a real rate. Reported as unmeasured."
+            )
+        else:
+            out["prefill_tps"] = round(median_prefill, 1)
+    else:
+        out["prefill_tps"] = None
     out["decode_tps"] = round(statistics.median(decode), 2) if decode else None
     out["decode_stdev"] = round(statistics.stdev(decode), 2) if len(decode) > 1 else 0.0
 
+    # Fertility needs a prompt the server has never seen, or a partial cache
+    # hit understates the token count and flatters the tokenizer.
     n_words = devanagari_words(prompt)
     out["devanagari_words"] = n_words
-    out["fertility"] = round(last.get("prompt_eval_count", 0) / n_words, 2) if n_words else None
+    fertility_probe = f"[{time.time_ns()}]\n" + prompt
+    try:
+        fr = generate(model, fertility_probe, num_predict=1)
+        probe_words = devanagari_words(fertility_probe)
+        out["fertility"] = round(fr.get("prompt_eval_count", 0) / probe_words, 2) if probe_words else None
+    except Exception as exc:
+        out["fertility"] = None
+        out["errors"].append(f"fertility probe failed: {exc}")
 
     gen = last.get("response", "")
     out["sample_output"] = gen[:400]
@@ -153,7 +191,16 @@ def measure(model: str, prompt: str, repeats: int, threads: list[int]) -> dict:
             out["threads"][t] = None
             out["errors"].append(f"num_thread={t}: {exc}")
 
-    # 900s of drafting at the measured rate is the number staff will feel.
+    # --- the derived metrics that actually decide the model ---------------
+    #
+    # Raw t/s is not comparable across tokenizers. A model emitting 2x the
+    # tokens per Hindi word at 1.5x the token rate is slower in the only unit
+    # that matters to the user, and it also fits half as much retrieved
+    # context in the same window.
+    if out["decode_tps"] and out["fertility"]:
+        out["hindi_words_per_sec"] = round(out["decode_tps"] / out["fertility"], 2)
+        out["seconds_for_400_word_letter"] = round(400 / out["hindi_words_per_sec"], 1)
+        out["hindi_words_per_4k_context"] = int(4096 / out["fertility"])
     if out["decode_tps"]:
         out["seconds_for_600_token_draft"] = round(600 / out["decode_tps"], 1)
     return out
@@ -165,17 +212,21 @@ def render(results: list[dict], meta: dict) -> str:
          "Produced by `scripts/phase0_bench.py`. Re-run this after any hardware or",
          "Ollama change; it is the regression baseline for every later phase.", "",
          "## Results", "",
-         "| model | cold load (s) | prefill t/s | decode t/s | ±  | fertility | 600-tok draft (s) | Devanagari out |",
-         "|---|---:|---:|---:|---:|---:|---:|---:|"]
+         "| model | cold load (s) | decode t/s | ± | fertility | **Hindi words/s** | 400-word letter (s) | words per 4k ctx | prefill t/s |",
+         "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for r in results:
         if r.get("errors") and r.get("decode_tps") is None:
             L.append(f"| `{r['model']}` | FAILED | | | | | | |")
             continue
+        prefill = r.get("prefill_tps")
+        prefill_cell = str(prefill) if prefill else (
+            f"_cache ({r['prefill_suspect']})_" if r.get("prefill_suspect") else "-")
         L.append(
-            f"| `{r['model']}` | {r.get('cold_load_s','?')} | {r.get('prefill_tps','?')} | "
-            f"**{r.get('decode_tps','?')}** | {r.get('decode_stdev',0)} | "
-            f"{r.get('fertility','?')} | {r.get('seconds_for_600_token_draft','?')} | "
-            f"{r.get('output_is_devanagari','?')} |")
+            f"| `{r['model']}` | {r.get('cold_load_s','?')} | {r.get('decode_tps','?')} | "
+            f"{r.get('decode_stdev',0)} | {r.get('fertility','?')} | "
+            f"**{r.get('hindi_words_per_sec','?')}** | "
+            f"{r.get('seconds_for_400_word_letter','?')} | "
+            f"{r.get('hindi_words_per_4k_context','?')} | {prefill_cell} |")
 
     L += ["", "## Thread sweep (decode t/s by `num_thread`)", "",
           "| model | " + " | ".join(f"{t} threads" for t in meta["threads"]) + " |",
@@ -185,6 +236,16 @@ def render(results: list[dict], meta: dict) -> str:
         L.append(f"| `{r['model']}` | {cells} |")
 
     L += ["", "## How to read this", "",
+          "- **Hindi words/s** is the decision metric: `decode t/s ÷ fertility`.",
+          "  Raw t/s is not comparable across tokenizers, because a token is not",
+          "  the same amount of Hindi in two different vocabularies. Rank models",
+          "  on this column, not on decode t/s.",
+          "- **words per 4k ctx** is the same effect on the input side: it caps how",
+          "  many retrieved exemplars fit in the prompt. Below roughly 900 words",
+          "  you cannot fit two full letters plus an instruction, which forces the",
+          "  skeleton-plus-slots design from Phase 3 rather than raw exemplars.",
+          "- **prefill t/s** shown as `_cache (N)_` means the measurement was",
+          "  rejected as prompt-cache reuse. It is not a hardware result.",
           "- **fertility** is prompt tokens per Devanagari word. Lower is strictly",
           "  better: it is a direct multiplier on draft latency and on how many",
           "  exemplars fit in the context window. A model that wins on benchmark",
