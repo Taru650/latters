@@ -278,7 +278,18 @@ def render(results: list[dict], meta: dict) -> str:
     return "\n".join(L)
 
 
+def _utf8_console() -> None:
+    """Windows encodes stdout with the console code page (usually cp1252),
+    so the first Devanagari character aborts the script. See cli._prepare_streams."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_console()
     global HOST
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -323,8 +334,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nwrote {out}")
     if args.json_out:
         Path(args.json_out).write_text(
-            json.dumps({"meta": meta, "results": results}, ensure_ascii=False, indent=2),
-            encoding="utf-8")
+            json.dumps({"meta": meta, "results": results}, ensure_ascii=False,
+                       indent=2), encoding="utf-8",
+            )
         print(f"wrote {args.json_out}")
     return 0
 

@@ -14,21 +14,28 @@ closest to the real task:
 | configuration | cellP@5 | R@5 | ms |
 |---|---:|---:|---:|
 | random | 0.068 ± 0.014 | 0.013 | 0.0 |
-| bm25 | 0.357 ± 0.027 | 0.901 | 1.1 |
-| **bm25 + dept filter** | **0.458** | 0.936 | 1.0 |
-| tfidf | 0.390 ± 0.028 | 0.911 | 0.4 |
-| **tfidf + dept filter** | **0.480** | 0.946 | 0.4 |
-| rrf(bm25,tfidf) | 0.389 ± 0.028 | 0.917 | 1.9 |
-| **rrf + dept filter** | **0.489** | 0.946 | 1.9 |
+| bm25 | 0.384 ± 0.027 | 0.917 | 1.1 |
+| **bm25 + dept filter** | **0.479** | 0.952 | 1.2 |
+| tfidf | 0.417 ± 0.028 | 0.911 | 0.5 |
+| **tfidf + dept filter** | **0.500** | 0.936 | 0.5 |
+| rrf(bm25,tfidf) | 0.407 ± 0.028 | 0.914 | 1.8 |
+| **rrf + dept filter** | **0.500** | 0.949 | 1.8 |
+
+*(Numbers refreshed after end-to-end testing. They rose slightly because
+`latters segment` now stores each letter's subject — it previously did not,
+and Phase 4's original figures were obtained only because the column had been
+backfilled by hand. The conclusions are unchanged: the department filter is
+significant, the scorers are not distinguishable, and rrf and tfidf are now
+exactly tied.)*
 
 **One standard error is 0.028, so two rows differing by less than ~0.06 are
 not distinguishable at this sample size.** That single line changes how the
 whole table reads:
 
-- **The department filter is significant**: +0.09 to +0.10 across every
+- **The department filter is significant**: +0.08 to +0.10 across every
   scorer, well beyond 2 SE, and consistent in both conditions.
-- **The scorers are not distinguishable from each other.** bm25 0.458, tfidf
-  0.480, rrf 0.489 all sit inside one another's error bars. Picking a
+- **The scorers are not distinguishable from each other.** bm25 0.479, tfidf
+  0.500, rrf 0.500 all sit inside one another's error bars. Picking a
   "winner" from this table would be reporting noise.
 
 There is a principled reason the fusion adds little: RRF pays off when its

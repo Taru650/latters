@@ -1,0 +1,79 @@
+# SEED gold set for Kruti Dev 010.
+#
+# !!! READ THIS BEFORE TRUSTING A PASSING RUN !!!
+#
+# These pairs were derived from the mapping table's own logic, not from text
+# rendered by an installed Kruti Dev font. They therefore prove the CONVERTER
+# ENGINE works -- maximal munch, chhoti-i reordering, reph reordering, nukta
+# normalisation -- and they will catch any regression in it.
+#
+# They do NOT prove the TABLE is right for your archive. A slot that is wrong
+# here is wrong in both columns and passes happily. Only pairs transcribed from
+# real rendered letters by a Hindi reader can establish that; see the module
+# docstring in src/latters/gold.py for the procedure, and put them in a file
+# named office_<name>.tsv alongside this one.
+#
+# Format: legacy<TAB>expected<TAB>table<TAB>note
+
+#--- reordering: chhoti-i (pre-base in legacy, post-base in Unicode) -------
+fgUnh	हिन्दी	krutidev010	i-matra before simple consonant
+izfr	प्रति	krutidev010	i-matra after a subjoined-ra cluster
+fo"k;	विषय	krutidev010	i-matra + ssa conjunct
+izfrfyfi	प्रतिलिपि	krutidev010	three i-matras in one word
+fu;e	नियम	krutidev010	i-matra basic
+vf/kdkjh	अधिकारी	krutidev010	i-matra mid-word
+f'k{kk	शिक्षा	krutidev010	i-matra before sha, then ksha ligature
+
+#--- reordering: reph (post-base in legacy, pre-base in Unicode) -----------
+deZ	कर्म	krutidev010	reph on final consonant
+dk;kZy;	कार्यालय	krutidev010	reph with aa-matra following
+lanHkZ	संदर्भ	krutidev010	reph after anusvara word
+dk;Zokgh	कार्यवाही	krutidev010	reph mid-word
+ekpZ	मार्च	krutidev010	reph on cha
+lwpukFkZ	सूचनार्थ	krutidev010	reph on tha
+mn~ns';	उद्देश्य	krutidev010	explicit virama plus reph-free conjuncts
+
+#--- both reorderings interacting -----------------------------------------
+dhfrZ	कीर्ति	krutidev010	i-matra and reph in the same syllable
+fuxZe	निर्गम	krutidev010	i-matra then reph
+
+#--- maximal munch: multi-character slots ---------------------------------
+Kkiu	ज्ञापन	krutidev010	regression: `Kk` must NOT shadow K + aa-matra
+Kku	ज्ञान	krutidev010	gya ligature
+leh{kk	समीक्षा	krutidev010	ksha ligature plus aa-matra
+vkns'k	आदेश	krutidev010	aa vowel, sha
+vks	ओ	krutidev010	three-char vowel slot
+vkS	औ	krutidev010	three-char vowel slot
+,s	ऐ	krutidev010	two-char vowel slot
+vk;ksftr	आयोजित	krutidev010	o-matra two-char slot
+cSBd	बैठक	krutidev010	ai-matra
+lwpuk	सूचना	krutidev010	uu-matra
+
+#--- departmental vocabulary ----------------------------------------------
+Hkkjr ljdkj	भारत सरकार	krutidev010	
+dk;kZy; Kkiu	कार्यालय ज्ञापन	krutidev010	office memorandum
+i= la[;k	पत्र संख्या	krutidev010	regression: `=` is the tra slot
+lsok esa	सेवा में	krutidev010	
+egksn;	महोदय	krutidev010	
+Hkonh;	भवदीय	krutidev010	
+vuq'kkflr	अनुशासित	krutidev010	
+foHkkxk/;{k	विभागाध्यक्ष	krutidev010	long conjunct chain
+'kkldh;	शासकीय	krutidev010	
+mPprj	उच्चतर	krutidev010	gemination
+ek/;fed	माध्यमिक	krutidev010	
+fo|ky;	विद्यालय	krutidev010	dya ligature
+izkpk;Z	प्राचार्य	krutidev010	subjoined ra plus reph
+vuqlj.k	अनुसरण	krutidev010	nna slot
+izsf"kr	प्रेषित	krutidev010	
+fnukad	दिनांक	krutidev010	
+vkosnu	आवेदन	krutidev010	
+fu;qfDr	नियुक्ति	krutidev010	half-ka plus i-matra
+LFkkukarj.k	स्थानांतरण	krutidev010	half-sa plus tha
+dk;Zdze	कार्यक्रम	krutidev010	
+
+#--- punctuation and numeral slots ----------------------------------------
+¼d½	(क)	krutidev010	paren slots
+A	।	krutidev010	danda
+12&2024	१२-२०२४	krutidev010	digits map to Devanagari, & is the hyphen slot
+15-03-2024	१५-०३-२०२४	krutidev010	ASCII hyphen passes through
+lsok esa]	सेवा में,	krutidev010	`]` is the comma slot

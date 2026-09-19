@@ -38,6 +38,13 @@ MIN_LINE_CHARS = 4
 BOILERPLATE_THRESHOLD = 0.30
 #: Below this many letters, "appears in 30% of them" is not evidence.
 MIN_CELL_SIZE = 8
+#: Letterhead, addressee and closing lines are short. The longest real one in
+#: the sample archive is a 90-character e-mail/phone line. A "boilerplate"
+#: line longer than this is a body sentence that happens to recur -- which it
+#: does, because canonical() folds away the numbers that distinguish
+#: otherwise-identical bodies -- and putting it in the letterhead is worse
+#: than losing it.
+MAX_BOILERPLATE_CHARS = 120
 
 
 def canonical(line: str) -> str:
@@ -82,6 +89,13 @@ class Skeleton:
     blanks: list[tuple[str, int]] = field(default_factory=list)
     #: Median body length, so generation can be told how long to write.
     median_body_chars: int = 0
+    #: Role of each boilerplate line, parallel to `boilerplate`. See
+    #: ROLE_ORDER; _UNANCHORED for lines no anchor matched.
+    roles: list[int] = field(default_factory=list)
+    #: Lines that were mined as boilerplate but are body content, dropped
+    #: from assembly and kept here so the admin page can show what was
+    #: discarded and why.
+    dropped_as_body: list[tuple[str, int]] = field(default_factory=list)
 
     @property
     def coverage(self) -> float:
@@ -90,21 +104,67 @@ class Skeleton:
 
     _coverage: float = 0.0
 
+    def before_subject(self) -> list[str]:
+        """Letterhead, number, date and addressee -- above the subject line."""
+        return [lit for lit, role in zip(
+            (l for _, _, l in self.boilerplate), self.roles)
+            if role < ROLE_SALUTATION]
+
+    def salutation(self) -> list[str]:
+        """`महाशय,` sits BETWEEN the subject and the body.
+
+        The order in the sample archive is
+        सेवा में → addressee → विषय → प्रसंग → महाशय → body,
+        and emitting the salutation above the subject reads as wrong to
+        anyone who writes these letters.
+        """
+        return [lit for lit, role in zip(
+            (l for _, _, l in self.boilerplate), self.roles)
+            if role == ROLE_SALUTATION]
+
+    def before_body(self) -> list[str]:
+        """Everything above the body, subject excluded."""
+        return self.before_subject() + self.salutation()
+
+    def after_body(self) -> list[str]:
+        """The closing and distribution block."""
+        return [lit for lit, role in zip(
+            (l for _, _, l in self.boilerplate), self.roles)
+            if role >= ROLE_CLOSING]
+
     def render(self) -> str:
+        """Write the skeleton out for a person to correct.
+
+        Two explicit sections rather than one flat list. That is clearer for
+        the clerk -- "these lines go above the subject, these below the
+        body" is how a letter actually works -- and it is what makes the
+        edit round-trip: `parse_skeleton` recovers the structure from the
+        headings instead of re-guessing it from each line in isolation,
+        which it cannot do, because a signatory line and a body line look
+        identical out of context.
+        """
         head = [f"# {self.department} / {self.letter_type}   "
                 f"({self.n_letters} letters, skeleton covers "
-                f"{self.coverage:.0%} of a typical letter)"]
-        head.append("")
-        head.append("## fixed lines")
-        for canon, n, literal in self.boilerplate:
-            head.append(f"  [{n:4d}/{self.n_letters}]  {literal}")
+                f"{self.coverage:.0%} of a typical letter)",
+                "",
+                "Edit freely: reorder lines, fix wording, add or delete them.",
+                "Keep the three '##' headings. Your version wins over the",
+                "mined one from then on.",
+                "", _BEFORE_HEADER]
+        for literal in self.before_body():
+            head.append(f"  {literal}")
+        head += ["", _AFTER_HEADER]
+        for literal in self.after_body():
+            head.append(f"  {literal}")
         if self.blanks:
-            head.append("")
-            head.append("## slots to fill")
+            head += ["", _SLOT_HEADER]
             for label, n in self.blanks:
-                head.append(f"  [{n:4d}]  {label}")
-        head.append("")
-        head.append(f"## body: write roughly {self.median_body_chars} characters")
+                head.append(f"  {label}")
+        if self.dropped_as_body:
+            head += ["", "## dropped: recurring, but body text not letterhead"]
+            for literal, n in self.dropped_as_body:
+                head.append(f"  [{n}]  {literal}")
+        head += ["", f"{_BODY_HEADER} write roughly {self.median_body_chars} characters"]
         return "\n".join(head)
 
 
@@ -128,6 +188,8 @@ ROLE_ORDER: dict[str, int] = {
 #: signatory's post -- sit between the landmarks. They inherit the role of
 #: whichever anchored line they sit nearest to by median position.
 _UNANCHORED = 4
+ROLE_SALUTATION = 7
+ROLE_CLOSING = 9
 
 
 def line_role(line: str) -> int | None:
@@ -201,7 +263,42 @@ def mine(letters: list[str], department: str, letter_type: str) -> Skeleton:
         nearest = min(landmarks, key=lambda lm: abs(lm[0] - pos))
         return nearest[1], pos
 
-    boiler = [row for row, role in sorted(anchored, key=lambda x: _rank(*x))]
+    ordered = sorted(anchored, key=lambda x: _rank(*x))
+
+    # Where the closing formula sits. An unanchored line inherits the role of
+    # its nearest landmark, which makes a body sentence just BEFORE the
+    # closing and a signatory line just AFTER it both come out as role 9 --
+    # indistinguishable. Their positions are not: the signatory block is
+    # below the closing and body text is above it.
+    closing_pos = min((_median(positions[row[0]])
+                       for row, role in anchored if role == ROLE_CLOSING),
+                      default=None)
+
+    # A sentence common to 30% of a cell gets mined as boilerplate even when
+    # it is body content -- "इसे शीर्ष प्राथमिकता दी जाय।" is a real
+    # recurring instruction, but it belongs in the body, not the letterhead.
+    # Structurally, anything sitting between the salutation and the closing
+    # IS the body. Dropping those is what lets an unedited skeleton produce a
+    # correctly ordered letter instead of a muddled one.
+    boiler: list[tuple[str, int, str]] = []
+    roles: list[int] = []
+    dropped: list[tuple[str, int]] = []
+    for row, role in ordered:
+        effective = _rank(row, role)[0]
+        pos = _median(positions[row[0]])
+        is_body = ROLE_SALUTATION < effective < ROLE_CLOSING
+        if len(row[2]) > MAX_BOILERPLATE_CHARS:
+            is_body = True
+        if (role is None and effective >= ROLE_CLOSING
+                and closing_pos is not None and pos < closing_pos):
+            # Unanchored, grouped with the closing, but sitting above it:
+            # that is body text, not a signature line.
+            is_body = True
+        if is_body:
+            dropped.append((row[2], row[1]))
+            continue
+        boiler.append(row)
+        roles.append(effective)
 
     # How much of a typical letter does the skeleton account for?
     boiler_set = {c for c, _, _ in boiler}
@@ -215,7 +312,7 @@ def mine(letters: list[str], department: str, letter_type: str) -> Skeleton:
 
     sk = Skeleton(
         department=department, letter_type=letter_type, n_letters=n,
-        boilerplate=boiler,
+        boilerplate=boiler, roles=roles, dropped_as_body=dropped,
         blanks=[(l, k) for l, k in blank_labels.most_common() if k >= cutoff],
         median_body_chars=body_lens[len(body_lens) // 2] if body_lens else 0)
     sk._coverage = sum(shares) / len(shares) if shares else 0.0
@@ -252,6 +349,9 @@ def mine_all(rows: list[tuple[str, str, str]], *,
 #: writes the mined skeletons out, staff fix the order, and the edited file
 #: wins from then on. Machine-mined is the starting point; human-corrected is
 #: the artefact.
+_BEFORE_HEADER = "## above the subject line"
+_AFTER_HEADER = "## below the body"
+#: Accepted for skeletons written by an earlier version.
 _FIXED_HEADER = "## fixed lines"
 _SLOT_HEADER = "## slots to fill"
 _BODY_HEADER = "## body:"
@@ -259,24 +359,36 @@ _COUNT_PREFIX = re.compile(r"^\s*\[\s*\d+\s*/?\s*\d*\s*\]\s?")
 
 
 def parse_skeleton(text: str, department: str, letter_type: str) -> Skeleton:
-    """Read a skeleton back from its rendered form, after human editing.
+    """Read a skeleton back after human editing.
 
-    Tolerant on purpose: a clerk editing this file will delete the `[ 43/53]`
-    counts, reorder lines and add ones the archive never contained. All of
-    that is intended. Only the `## fixed lines` heading has to survive.
+    Tolerant on purpose: a clerk will delete the counts, reorder lines and
+    add ones the archive never contained. All of that is intended. Only the
+    section headings have to survive, because they carry the structure that
+    cannot be recovered from a line in isolation -- `प्रभारी पदाधिकारी,` is a
+    signatory line above the closing and a body line below it, and it reads
+    the same either way.
     """
     section = None
-    boiler: list[tuple[str, int, str]] = []
+    before: list[str] = []
+    after: list[str] = []
     blanks: list[tuple[str, int]] = []
     body_chars = 0
+
     for raw in text.splitlines():
-        line = raw.rstrip()
-        stripped = line.strip()
-        if stripped.startswith(_FIXED_HEADER):
-            section = "fixed"
+        stripped = raw.strip()
+        if stripped.startswith(_BEFORE_HEADER) or stripped.startswith(_FIXED_HEADER):
+            section = "before"
+            continue
+        if stripped.startswith(_AFTER_HEADER):
+            section = "after"
             continue
         if stripped.startswith(_SLOT_HEADER):
             section = "slots"
+            continue
+        if stripped.startswith("## dropped"):
+            # Body lines the miner already rejected; listed for transparency,
+            # never read back in.
+            section = None
             continue
         if stripped.startswith(_BODY_HEADER):
             section = None
@@ -286,17 +398,33 @@ def parse_skeleton(text: str, department: str, letter_type: str) -> Skeleton:
             continue
         if not stripped or stripped.startswith("#"):
             continue
-        content = _COUNT_PREFIX.sub("", line).strip()
+        content = _COUNT_PREFIX.sub("", raw).strip()
         if not content:
             continue
-        if section == "fixed":
-            boiler.append((canonical(content), 0, content))
+        if section == "before":
+            before.append(content)
+        elif section == "after":
+            after.append(content)
         elif section == "slots":
             blanks.append((content, 0))
 
+    # An older one-section file: split it on the closing anchor so it still
+    # assembles correctly.
+    if before and not after:
+        cut = next((i for i, l in enumerate(before)
+                    if line_role(l) == ROLE_CLOSING), None)
+        if cut is not None:
+            before, after = before[:cut], before[cut:]
+
+    boiler = [(canonical(l), 0, l) for l in before + after]
+    # Keep the salutation distinguishable inside the "above the subject"
+    # section, so it can still be placed after the subject line on assembly.
+    roles = [ROLE_SALUTATION if line_role(l) == ROLE_SALUTATION
+             else ROLE_SALUTATION - 1 for l in before]
+    roles += [ROLE_CLOSING] * len(after)
     sk = Skeleton(department=department, letter_type=letter_type,
-                  n_letters=0, boilerplate=boiler, blanks=blanks,
-                  median_body_chars=body_chars or 600)
+                  n_letters=0, boilerplate=boiler, roles=roles,
+                  blanks=blanks, median_body_chars=body_chars or 600)
     sk._coverage = 0.0
     return sk
 

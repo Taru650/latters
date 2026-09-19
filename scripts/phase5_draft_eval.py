@@ -69,7 +69,18 @@ def load_pairs(path: Path) -> list[tuple[str, str]]:
     return out
 
 
+def _utf8_console() -> None:
+    """Windows encodes stdout with the console code page (usually cp1252),
+    so the first Devanagari character aborts the script. See cli._prepare_streams."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv=None) -> int:
+    _utf8_console()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", required=True)

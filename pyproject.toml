@@ -22,4 +22,4 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-latters = ["data/fonts/*.tsv"]
+latters = ["data/fonts/*.tsv", "data/gold/*.tsv"]

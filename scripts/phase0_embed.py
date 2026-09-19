@@ -84,7 +84,18 @@ def draft(model: str, label: str) -> float:
     return load_s
 
 
+def _utf8_console() -> None:
+    """Windows encodes stdout with the console code page (usually cp1252),
+    so the first Devanagari character aborts the script. See cli._prepare_streams."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_console()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--llm", default="gemma3:1b")

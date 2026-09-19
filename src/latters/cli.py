@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -44,6 +45,36 @@ from .repair import repair as repair_text
 from .validate import assess, build_vocabulary
 
 ARCHIVE_SUFFIXES = (".docx", ".doc", ".dot", ".rtf", ".pdf")
+
+
+def _require_dir(path: str) -> Path | None:
+    """An archive path that does not exist is a typo, not an empty archive.
+
+    Reporting "0 files" for a mistyped path is the same output as a genuinely
+    empty folder, so the mistake looks like a finding.
+    """
+    p = Path(path)
+    if not p.exists():
+        print(f"no such path: {p}", file=sys.stderr)
+        return None
+    return p
+
+
+def _require_db(path: str) -> str | None:
+    """A corpus database must already exist for every command that reads one.
+
+    sqlite3 creates a database on connect, and Store() creates the parent
+    directory too, so a mistyped --db silently produced an EMPTY corpus that
+    every later command then operated on quite happily. Only `segment`
+    creates a database.
+    """
+    p = Path(path)
+    if not p.exists():
+        print(f"no corpus database at {p}\n"
+              f"  Create one with:  latters segment <archive> --db {p}",
+              file=sys.stderr)
+        return None
+    return path
 
 
 def _iter_files(root: Path) -> list[Path]:
@@ -102,6 +133,9 @@ def cmd_gold(args: argparse.Namespace) -> int:
 
 # --------------------------------------------------------------------------
 def cmd_gold_extract(args: argparse.Namespace) -> int:
+    if _require_dir(args.archive) is None:
+        return 2
+
     from .goldbuild import (mark_blind, mine_candidates, select_by_coverage,
                             write_review_docx, write_review_tsv)
 
@@ -251,8 +285,12 @@ def _convert_all(root: Path, args) -> list[tuple[Path, str]]:
 
 
 def cmd_segment(args: argparse.Namespace) -> int:
+    from .fields import extract as extract_fields
     from .segment import segment as split, trust, verdict
     from .store import LetterRow, Store
+
+    if _require_dir(args.path) is None:
+        return 2
 
     converted = _convert_all(Path(args.path), args)
     if not converted:
@@ -269,13 +307,18 @@ def cmd_segment(args: argparse.Namespace) -> int:
             q = assess(seg.text, vocabulary=vocab or None)
             comp = seg.completeness()
             score = trust(q.score, comp, args.tier)
+            # The subject has to be stored here. It feeds the FTS subject
+            # column and the retrieval evaluation's query set, and leaving it
+            # NULL made both silently inert in a fresh pipeline.
+            subject = extract_fields(seg.text).subject
             rows.append(LetterRow(
                 source_file=path.name, seq=i, text=seg.text,
                 start_line=seg.start_line, end_line=seg.end_line,
                 source_tier=args.tier, conversion_confidence=q.score,
                 completeness=comp, trust=score, verdict=verdict(score),
                 opened_by=seg.opened_by, anchors=seg.anchors,
-                violations=q.violations, missing=seg.missing()))
+                violations=q.violations, missing=seg.missing(),
+                subject=subject.value if subject else None))
 
     for name, n in per_file:
         print(f"  {name[:44]:46} {n:4d} letters")
@@ -294,6 +337,9 @@ def cmd_segment(args: argparse.Namespace) -> int:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
+    if _require_dir(args.path) is None:
+        return 2
+
     """Are the anchors right for THIS office? Run before trusting any output.
 
     Every archive has house style. The sample archive this was first tuned
@@ -352,6 +398,9 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
+    if _require_db(args.db) is None:
+        return 2
+
     from .store import Store
     with Store(args.db) as store:
         print(json.dumps(store.stats(), ensure_ascii=False, indent=2))
@@ -359,6 +408,9 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
+    if _require_db(args.db) is None:
+        return 2
+
     from .store import Store
     with Store(args.db) as store:
         hits = store.search(args.query, limit=args.limit, min_trust=args.min_trust)
@@ -387,6 +439,11 @@ def _labelled_rows(db_path: str):
 def cmd_fields(args: argparse.Namespace) -> int:
     from .fields import extract
 
+    if args.db and _require_db(args.db) is None:
+        return 2
+    if not args.db and (args.path is None or _require_dir(args.path) is None):
+        return 2
+
     if args.db:
         texts = [r[1] for r in _labelled_rows(args.db)]
     else:
@@ -412,6 +469,9 @@ def cmd_fields(args: argparse.Namespace) -> int:
 
 
 def cmd_classify(args: argparse.Namespace) -> int:
+    if _require_db(args.db) is None:
+        return 2
+
     from .classify import (UNLABELLED, cross_validate, department_features,
                            fold_rare, letter_type_features)
     from .store import Store
@@ -456,6 +516,9 @@ def cmd_classify(args: argparse.Namespace) -> int:
 
 
 def cmd_templates(args: argparse.Namespace) -> int:
+    if _require_db(args.db) is None:
+        return 2
+
     from .classify import UNLABELLED
     from .template import mine_all
 
@@ -507,6 +570,9 @@ def _build_retriever(store, *, dense_model: str | None = None):
 
 
 def cmd_retrieve(args: argparse.Namespace) -> int:
+    if _require_db(args.db) is None:
+        return 2
+
     from .retrieve import Filters
     from .store import Store
 
@@ -542,6 +608,9 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
+    if _require_db(args.db) is None:
+        return 2
+
     from .evaluate import build_queries, evaluate, random_baseline, render
     from .store import Store
 
@@ -551,10 +620,26 @@ def cmd_eval(args: argparse.Namespace) -> int:
             print("corpus is empty", file=sys.stderr)
             return 1
         queries = build_queries(letters, min_cell=args.min_cell)
+        if not queries:
+            n_subj = sum(1 for l in letters if l.subject)
+            n_lab = sum(1 for l in letters if l.department and l.letter_type)
+            print(
+                f"nothing to evaluate: 0 of {len(letters)} letters qualify as "
+                f"a query.\n"
+                f"  with a subject line      {n_subj}\n"
+                f"  with department and type {n_lab}\n"
+                f"  needed: a subject AND {args.min_cell}+ letters sharing its "
+                f"(department, type) cell\n"
+                f"Run `latters classify --db {args.db} --write` first, and "
+                f"lower --min-cell if the corpus is small.\n"
+                "Printing an empty results table here would look like an "
+                "evaluation that found nothing, rather than one that never "
+                "ran.", file=sys.stderr)
+            return 2
         if len(queries) < 30:
             print(f"only {len(queries)} evaluable queries -- too few to "
-                  "distinguish configurations. Ingest more of the archive.",
-                  file=sys.stderr)
+                  "distinguish configurations at two standard errors. Treat "
+                  "what follows as indicative.", file=sys.stderr)
         print(f"{len(letters)} letters, {len(queries)} evaluable queries "
               f"(subject present, {args.min_cell}+ cell-mates)")
 
@@ -593,6 +678,9 @@ comparisons between configurations, never as absolute quality.""")
 
 # --------------------------------------------------------------------------
 def cmd_draft(args: argparse.Namespace) -> int:
+    if _require_db(args.db) is None:
+        return 2
+
     from .draft import Budget, build_service
     from .llm import Ollama, OllamaError, StubLLM
     from .store import Store
@@ -612,13 +700,17 @@ def cmd_draft(args: argparse.Namespace) -> int:
         if not store.count():
             print("corpus is empty; run `latters segment` first", file=sys.stderr)
             return 1
-        service = build_service(
-            store, llm,
+        try:
+            service = build_service(
+                store, llm,
             budget=Budget(context=args.num_ctx,
                           reserve_for_output=args.num_predict,
                           fertility=args.fertility),
             max_exemplars=args.exemplars, min_trust=args.min_trust,
-            skeleton_overrides=args.skeletons)
+                skeleton_overrides=args.skeletons)
+        except (FileNotFoundError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         try:
             draft = service.draft(args.request, department=args.department,
                                   letter_type=args.letter_type, subject=args.subject)
@@ -651,12 +743,18 @@ def cmd_draft(args: argparse.Namespace) -> int:
     for w in draft.warnings:
         print(f"\n!  {w}")
 
+    if draft.needs_review:
+        print("\n!! THIS DRAFT NEEDS REVIEW before it is used at all "
+              "(see the warnings above).")
     print("\nThis is a draft. It must be read and corrected before dispatch.")
     return 1 if draft.needs_review else 0
 
 
 # --------------------------------------------------------------------------
 def cmd_inventory(args: argparse.Namespace) -> int:
+    if _require_dir(args.path) is None:
+        return 2
+
     """Phase 1.1: how much of this archive is legacy, and in which fonts?
 
     Run this before writing any other code against the archive. The histogram
@@ -726,6 +824,9 @@ def cmd_inventory(args: argparse.Namespace) -> int:
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
+    if _require_dir(args.path) is None:
+        return 2
+
     root = Path(args.path)
     out_dir = Path(args.out) if args.out else None
     if out_dir:
@@ -777,6 +878,10 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         print(f"  {verdict:11} {summary.get(verdict, 0)}")
     if skipped:
         print(f"  {'skipped':11} {len(skipped)}")
+        for path, why in skipped[:10]:
+            print(f"    {Path(path).name}: {why}")
+        if len(skipped) > 10:
+            print(f"    ... and {len(skipped) - 10} more")
     flagged = [r for r in rows if r["verdict"] != "clean"]
     if flagged:
         print("\nneeds attention")
@@ -957,9 +1062,47 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _prepare_streams() -> None:
+    """Make the console safe for Devanagari and for being piped.
+
+    Two platform realities, both found by running the CLI rather than by
+    reading it:
+
+    * On Windows, Python encodes stdout with the console code page. In
+      cmd.exe that is usually cp1252, and the first Devanagari character of a
+      draft raises UnicodeEncodeError. The target machine for this project is
+      a Windows laptop, so without this every command that prints a letter
+      crashes there while working perfectly in development.
+    * `latters templates | head` raises BrokenPipeError with a traceback when
+      head exits. Office staff pipe to `head` and `more` constantly.
+
+    `errors="replace"` rather than "strict": a console that genuinely cannot
+    render Devanagari should print boxes, not abort the command. The files
+    the tool writes are always UTF-8 regardless.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _prepare_streams()
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except BrokenPipeError:
+        # The reader went away (`| head`). Devnull stdout so the interpreter
+        # does not report the same error again while flushing at exit.
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except OSError:
+            pass
+        return 0
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

@@ -27,7 +27,15 @@ from pathlib import Path
 
 from .fonts.convert import Converter, normalize_devanagari
 
-DEFAULT_GOLD = Path(__file__).resolve().parent.parent.parent / "tests" / "gold"
+#: The seed set ships as package data. A wheel does not contain `tests/`, so
+#: an installed copy previously found no gold files at all and the deployed
+#: office had no regression harness -- the one thing that proves the font
+#: table is right for their archive.
+PACKAGED_GOLD = Path(__file__).resolve().parent / "data" / "gold"
+#: Where an office puts its own hand-verified pairs. Checked in this order.
+USER_GOLD_DIRS = (Path("gold"), Path("tests") / "gold",
+                  Path.home() / ".latters" / "gold")
+DEFAULT_GOLD = PACKAGED_GOLD
 
 
 def levenshtein(a: str, b: str) -> int:
@@ -137,5 +145,17 @@ def run(paths: list[Path], *, latin_digits: bool = False) -> GoldReport:
     return GoldReport(results)
 
 
-def discover(root: Path = DEFAULT_GOLD) -> list[Path]:
-    return sorted(root.glob("*.tsv")) if root.exists() else []
+def discover(root: Path | None = None) -> list[Path]:
+    """Find gold files: the packaged seed set plus any the office has added.
+
+    Deduplicated by filename, with a user copy winning over the packaged one
+    so an office can correct the seed set without editing the installation.
+    """
+    if root is not None:
+        return sorted(root.glob("*.tsv")) if root.exists() else []
+    found: dict[str, Path] = {}
+    for d in (PACKAGED_GOLD, *USER_GOLD_DIRS):
+        if d.exists():
+            for f in sorted(d.glob("*.tsv")):
+                found[f.name] = f
+    return list(found.values())

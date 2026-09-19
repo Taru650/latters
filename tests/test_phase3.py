@@ -247,6 +247,12 @@ def test_mine_all_skips_cells_too_small_to_generalise():
 
 
 def test_skeleton_renders_something_a_clerk_can_read():
-    sk = mine(["कार्यालय राजस्व\nविश्वासभाजन"] * 10, "राजस्व", "भूमि")
+    """Two explicit sections, because "these go above the subject, these
+    below the body" is how a letter actually works -- and because the
+    structure cannot be recovered from a line in isolation on re-reading."""
+    sk = mine(["कार्यालय राजस्व\nमहाशय,\nविश्वासभाजन"] * 10, "राजस्व", "भूमि")
     r = sk.render()
-    assert "राजस्व" in r and "fixed lines" in r and "body" in r
+    assert "राजस्व" in r
+    assert "## above the subject line" in r and "## below the body" in r
+    assert "body: write roughly" in r
+    assert r.index("## above the subject line") < r.index("## below the body")

@@ -19,13 +19,20 @@ BODY = ("उपर्युक्त विषय के प्रसंग म�
         "करते हुए प्रतिवेदन इस कार्यालय को उपलब्ध कराएँ।")
 
 
+_TOPICS = ["भूमि विवाद", "अतिक्रमण", "जमाबंदी सुधार", "लगान वसूली", "सीमांकन",
+           "दाखिल खारिज", "नक्शा", "खाता विभाजन", "बंदोबस्ती", "अभिलेख सुधार",
+           "मापी", "कब्जा", "वाद", "अपील", "निरीक्षण", "सत्यापन", "प्रगति",
+           "अनुपालन", "शिकायत", "स्थल जाँच"]
+
+
 def _letter(i, office="जिला राजस्व शाखा", branch="रा०", topic="जाँच प्रकरण"):
     # Bodies must differ, as they do in the real archive: 545 of 547 letters
     # had a unique body.
     return (f"कार्यालय {office}\nपत्रांक- ------------/{branch},\n"
             f"छपरा, दिनांक------------\nसेवा में,\nअंचल अधिकारी,\n"
-            f"विषय:- {topic} {i} के संबंध में।\nमहाशय,\n"
-            f"{topic} {i} के प्रसंग में {BODY}\nविश्वासभाजन")
+            f"विषय:- {topic} {_TOPICS[i % len(_TOPICS)]} के संबंध में।\n"
+            f"महाशय,\n"
+            f"{_TOPICS[i % len(_TOPICS)]} के प्रसंग में {BODY}\nविश्वासभाजन")
 
 
 # --- token budgeting ------------------------------------------------------
@@ -158,16 +165,25 @@ def test_assembly_has_no_duplicate_lines():
     assert len(lines) == len(set(lines))
 
 
-def test_assembly_orders_letterhead_before_salutation():
-    """Regression: boilerplate came out in frequency order, which put the
-    salutation above the letter number."""
+def test_assembly_follows_the_archive_order():
+    """The order in the real archive is
+    letterhead → number → date → सेवा में → addressee → विषय → महाशय → body
+    → closing → signatory.
+
+    Two regressions live here. Boilerplate first came out in frequency
+    order, putting the salutation above the letter number; then the
+    salutation was emitted above the subject, which reads as wrong to
+    anyone who writes these letters."""
     out = assemble(BODY, skeleton=_skeleton(), subject="जाँच")
     lines = [l.strip() for l in out.splitlines()]
-    num = next(i for i, l in enumerate(lines) if l.startswith("पत्रांक"))
-    assert num < lines.index("सेवा में,")
-    assert lines.index("सेवा में,") < lines.index("महाशय,")
-    assert lines.index("महाशय,") < next(i for i, l in enumerate(lines)
-                                        if l.startswith("विषय"))
+    pos = lambda pred: next(i for i, l in enumerate(lines) if pred(l))
+    num = pos(lambda l: l.startswith("पत्रांक"))
+    to = lines.index("सेवा में,")
+    subject = pos(lambda l: l.startswith("विषय"))
+    salutation = lines.index("महाशय,")
+    body = pos(lambda l: BODY in l)
+    closing = lines.index("विश्वासभाजन")
+    assert num < to < subject < salutation < body < closing
 
 
 def test_assembly_works_without_a_skeleton():
@@ -223,15 +239,17 @@ def test_truncation_is_detected():
 def _service(llm, **kw):
     # Two departments, or the classifier has nothing to learn and silently
     # declines to fit -- which is what made the request lose its department.
+    # Above MIN_USEFUL_CORPUS, or every draft is (correctly) flagged as
+    # coming from a corpus too thin to retrieve anything representative.
     letters = [Letter(id=i + 1, text=_letter(i), subject=f"जाँच प्रकरण {i}",
                       department="राजस्व", letter_type="जाँच", trust=0.9)
-               for i in range(12)]
+               for i in range(20)]
     letters += [Letter(id=100 + i,
                        text=_letter(i, office="जिला स्थापना शाखा",
                                     branch="स्था०", topic="वेतन भुगतान"),
                        subject=f"वेतन भुगतान {i}", department="स्थापना",
                        letter_type="भुगतान", trust=0.9)
-                for i in range(12)]
+                for i in range(20)]
     store = Store()
     store.add([LetterRow("f.docx", l.id, l.text, trust=l.trust, subject=l.subject)
                for l in letters])
@@ -303,3 +321,53 @@ def test_letter_type_from_the_model_is_flagged_as_unreliable():
 
 def test_trained_classifier_never_claims_letter_type_is_confident():
     assert TrainedClassifier().letter_type_confident is False
+
+
+# --- guards found by end-to-end testing -----------------------------------
+def test_thin_corpus_is_flagged():
+    """A draft from three letters looks exactly as confident as a good one."""
+    store, svc = _service(StubLLM(reply=BODY))
+    with store:
+        svc.retriever.letters = svc.retriever.letters[:5]
+        d = svc.draft("जाँच प्रतिवेदन", department="राजस्व", letter_type="जाँच")
+    assert d.thin_corpus and d.needs_review
+    assert any("only 5 letter" in w for w in d.warnings)
+
+
+def test_draft_with_no_sources_needs_review():
+    store, svc = _service(StubLLM(reply=BODY), min_trust=0.999)
+    with store:
+        d = svc.draft("कुछ", department="कोई-नहीं")
+    assert not d.sources and d.needs_review
+
+
+def test_missing_skeleton_directory_is_an_error_not_a_silent_no_op():
+    """A mistyped --skeletons path used to be ignored, so the clerk's
+    corrections appeared to have had no effect."""
+    from latters.draft import load_skeletons
+    store, _ = _service(StubLLM())
+    with store:
+        with pytest.raises(FileNotFoundError, match="no skeleton directory"):
+            load_skeletons(store.db, overrides="/no/such/dir")
+
+
+def test_empty_skeleton_directory_is_an_error(tmp_path):
+    from latters.draft import load_skeletons
+    (tmp_path / "notes.txt").write_text("not a skeleton", encoding="utf-8")
+    store, _ = _service(StubLLM())
+    with store:
+        with pytest.raises(ValueError, match="no readable skeletons"):
+            load_skeletons(store.db, overrides=str(tmp_path))
+
+
+def test_packaged_gold_set_is_found_without_a_source_checkout():
+    """A wheel does not ship tests/, so an installed copy previously found no
+    gold files and the deployed office had no regression harness."""
+    from latters.gold import PACKAGED_GOLD, discover
+    assert PACKAGED_GOLD.is_dir()
+    # The packaged copy must be usable on its own...
+    packaged = discover(PACKAGED_GOLD)
+    assert packaged and all(p.parent == PACKAGED_GOLD for p in packaged)
+    # ...and a user's own file of the same name must override it, so an
+    # office can correct the seed set without editing its installation.
+    assert discover()

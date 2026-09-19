@@ -49,6 +49,10 @@ from .validate import assess
 # --------------------------------------------------------------------------
 # Token budgeting
 # --------------------------------------------------------------------------
+#: Below this many letters, retrieval has nothing representative to return
+#: and no (department, type) cell reaches the 8 letters a skeleton needs.
+MIN_USEFUL_CORPUS = 30
+
 #: Tokens per Devanagari word, measured in Phase 0 on the target machine:
 #: Gemma 3 1.97, Qwen3 6.03. The default is Gemma's; pass the measured value
 #: for whatever model is actually configured, because at 4096 context the
@@ -293,10 +297,14 @@ class Draft:
     truncated: bool = False
     warnings: list[str] = field(default_factory=list)
 
+    #: Too few past letters for retrieval to mean anything.
+    thin_corpus: bool = False
+
     @property
     def needs_review(self) -> bool:
-        return bool(self.unsupported_numbers) or self.truncated \
-            or self.quality_verdict != "clean"
+        return (bool(self.unsupported_numbers) or self.truncated
+                or self.quality_verdict != "clean"
+                or not self.sources or self.thin_corpus)
 
 
 def assemble(body: str, *, skeleton: Skeleton | None, subject: str | None,
@@ -311,10 +319,11 @@ def assemble(body: str, *, skeleton: Skeleton | None, subject: str | None,
     body_lines = {l.strip() for l in body.splitlines() if l.strip()}
 
     if skeleton is not None:
-        for canon, _, literal in skeleton.boilerplate:
-            if literal.strip() in body_lines:
-                continue
-            if _CLOSING_LINE.match(literal) or re.match(r"^\s*विषय", literal):
+        # Only the block above the subject line. Everything between the
+        # salutation and the closing is the body's territory, and the
+        # skeleton has already separated the two.
+        for literal in skeleton.before_subject():
+            if literal.strip() in body_lines or re.match(r"^\s*विषय", literal):
                 continue
             if re.search(r"पत्रांक|ज्ञापांक|दिनांक", literal):
                 line = re.sub(BLANK_RUN, BLANK_SLOT, literal)
@@ -332,14 +341,15 @@ def assemble(body: str, *, skeleton: Skeleton | None, subject: str | None,
 
     if subject:
         out.append(f"विषय:- {subject.rstrip('।')}।")
+    if skeleton is not None:
+        # The salutation belongs between the subject and the body.
+        out.extend(l for l in skeleton.salutation() if l.strip() not in body_lines)
     out.append("")
     out.append(body.strip())
     out.append("")
 
     if skeleton is not None:
-        closings = [lit for _, _, lit in skeleton.boilerplate
-                    if _CLOSING_LINE.match(lit)]
-        out.extend(closings or ["विश्वासभाजन"])
+        out.extend(skeleton.after_body() or ["विश्वासभाजन"])
     else:
         out.append("विश्वासभाजन")
     return "\n".join(out).strip()
@@ -393,10 +403,22 @@ class DraftService:
               options: dict | None = None) -> Draft:
         from .retrieve import Filters
 
+        # A corpus this small cannot supply a representative exemplar, and a
+        # draft from it looks exactly as confident as a good one. Say so.
+        n_corpus = len(getattr(self.retriever, "letters", []))
+        thin = n_corpus < MIN_USEFUL_CORPUS
+
         guess_dept, guess_type, how = self.classify(request)
         department = department or guess_dept
         letter_type = letter_type or guess_type
         warnings: list[str] = []
+        if thin:
+            warnings.append(
+                f"the corpus holds only {n_corpus} letter(s). Below roughly "
+                f"{MIN_USEFUL_CORPUS} there is nothing representative to "
+                "retrieve, no cell is large enough for a skeleton, and this "
+                "draft is close to asking the model cold. Ingest more of the "
+                "archive before using drafts from it.")
         if guess_type and letter_type == guess_type:
             # Warn whether the guess came from the keyword rules or the
             # model: the rules are what generated the labels the model was
@@ -468,7 +490,8 @@ class DraftService:
             text=text, body=body, department=department, letter_type=letter_type,
             subject=subject, sources=sources, removed_from_model_output=removed,
             unsupported_numbers=invented, quality_score=q.score,
-            quality_verdict=q.verdict, prompt_tokens=completion.prompt_tokens,
+            quality_verdict=q.verdict, thin_corpus=thin,
+            prompt_tokens=completion.prompt_tokens,
             output_tokens=completion.output_tokens,
             seconds=completion.wall_seconds, truncated=completion.truncated,
             warnings=warnings)
@@ -514,6 +537,19 @@ def load_skeletons(db, *, overrides: str | None = None
             rows.append((r["text"], dept, ltype))
     mined = {(s.department, s.letter_type): s for s in mine_all(rows)}
     if overrides:
+        from pathlib import Path as _Path
         from .template import load_overrides
-        mined.update(load_overrides(overrides))
+        # A mistyped --skeletons path used to be ignored in silence, so the
+        # clerk's corrections appeared to have had no effect.
+        if not _Path(overrides).is_dir():
+            raise FileNotFoundError(
+                f"no skeleton directory at {overrides}. Create one with: "
+                "latters templates --db <db> -o <dir>")
+        loaded = load_overrides(overrides)
+        if not loaded:
+            raise ValueError(
+                f"{overrides} contains no readable skeletons. They are the "
+                "*.md files written by `latters templates -o`, and each needs "
+                "its `# department / type` heading intact.")
+        mined.update(loaded)
     return mined
