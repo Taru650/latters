@@ -157,6 +157,81 @@ AA	॥	double danda
 *	’	closing single quote
 W	ॉ	candra-o matra (ऑ = vkW)
 
+#--- slots recovered from a real archive (Saran district, DevLys 040 /
+#--- Kruti Dev 041), each decoded from unambiguous context -----------------
+# Word's autocorrect rewrote the straight quotes in legacy text as curly
+# ones, so the sha/ssa half-form slots arrive as smart quotes. This is a
+# word-processor artefact, not a font difference, so it belongs in the base
+# table: 'k and "k are the same slots as ’k and ”k.
+’	श्	sha + virama (egk’k; -> महाशय)
+‘	श्	sha + virama (curly-open variant of the same slot)
+’k	श	sha  (funs’k -> निदेश)
+‘k	श	sha
+”	ष्	ssa + virama (Hkw”k.k -> भूषण)
+“	ष्	ssa + virama (curly-open variant)
+”k	ष	ssa
+“k	ष	ssa
+ß	“	opening double quote (lewg ßdÞ -> समूह "क")
+Þ	”	closing double quote
+
+# Slash. Both slots appear: @ in letter numbers, $ between place names.
+@	/	slash (i=kad&75@fnukad -> पत्रांक-75/दिनांक)
+$	/	slash (Fkkuk$iksLV -> थाना/पोस्ट)
+¾	=	equals (84]000¾00 -> 84,000=00)
+
+# Conjunct ligature slots this archive uses heavily.
+J	श्र	shra  (Jh -> श्री, 494 occurrences)
+)	द्ध	dhha  (o`f) -> वृद्धि, fo:) -> विरूद्ध)
+Ÿk	त	ta   (lekgŸkkZ -> समाहर्ता)
+Ÿ	त्	ta + virama
+Ùk	त्त	tta  (foÙk -> वित्त)
+Ù	त्त्	tta + virama
+í	द्द	dda  (jíhdj.k -> रद्दीकरण)
+Ì	द्द	dda (variant slot, mÍs’; -> उद्देश्य)
+Í	ट्ठ	tttha  (dÍk -> कट्ठा, a Bihar land measure)
+¶	फ्	pha + virama (¶ykoj -> फ्लावर)
+
+# Full-consonant form of the half-sa key. `L` alone is स्; `Lk` is स, not
+# स् + ा, which would be invalid Devanagari. Evidenced 46 times as Lkkj.k
+# -> सारण. The same pattern probably holds for other half-form keys;
+# do not add those without the same kind of evidence.
+Lk	स	sa
+
+#--- systematic completion: <half-form key> + k = the FULL consonant -------
+# The Remington layout gives every consonant a half form on the shifted key;
+# adding `k` to it yields the full consonant, NOT half + aa-matra. Half form
+# followed by an aa-matra is illegal Devanagari in every case, so these
+# entries can only be an improvement -- maximal munch takes the two-character
+# form and the one-character half form still applies everywhere else.
+#
+# Several were already present (Hk, Fk, 'k, "k, .k, /k, [k, {k, ?k, >k).
+# The rest were missing, which is why `Ik=kad` (101 occurrences in a real
+# archive) converted to प्ात्रांक instead of पत्रांक.
+Dk	क	ka
+Xk	ग	ga
+Pk	च	cha
+Tk	ज	ja
+Rk	त	ta
+Uk	न	na
+Ik	प	pa   (Ik=kad -> पत्रांक)
+Ck	ब	ba
+Ek	म	ma
+Yk	ल	la
+Ok	व	va
+ºk	ह	ha
+¶k	फ	pha
+
+#--- candra-o matra ---------------------------------------------------------
+# `kW` is a single unit, not aa-matra followed by candra-o. Typing MkW means
+# डॉ, not डाॉ; vkWuykbZu is ऑनलाइन, not आॉनलाईन. 215 occurrences in the
+# sample archive, all of them English loanwords.
+kW	ॉ	candra-o matra after a consonant (MkW0 -> डॉ०)
+# The independent vowel needs its own three-character slot: maximal munch
+# scans left to right, so in `vkWuykbZu` the two-character `vk` matches at
+# position 0 and wins before `kW` can be seen at position 1, giving आॉ
+# instead of ऑ. ऑ (U+0911) is a precomposed vowel, not अ + ॉ.
+vkW	ऑ	independent candra-o (vkWuykbZu -> ऑनलाइन)
+
 #--- digits (Kruti Dev renders ASCII digits as Devanagari digits) ---------
 # Disable with --latin-digits if your archive was typed with Latin numerals.
 0	०	digit 0

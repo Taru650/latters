@@ -30,6 +30,9 @@ _COLON_LABELS = (
     "विषय", "संदर्भ", "सन्दर्भ", "प्रतिलिपि", "संख्या", "क्रमांक",
     "दिनांक", "प्रेषक", "सेवा में", "प्रति", "उत्तर", "अनुलग्नक",
     "टिप्पणी", "कृते", "पृष्ठांकन",
+    # Measured in the Saran archive: पत्रांकः and प्रसंगः are written with a
+    # visarga because the legacy keyboard had no colon.
+    "पत्रांक", "ज्ञापांक", "प्रसंग", "प्रसङ्ग", "विषयक", "अनु०", "स्मारांक",
 )
 
 _LABEL_VISARGA_RE = re.compile(

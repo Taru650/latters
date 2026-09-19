@@ -1,0 +1,9 @@
+# krutidev041 -> Unicode.
+#
+# Present in a real district archive. No slot has yet been PROVEN to differ
+# from the base table, so this file inherits it and carries no overrides.
+# That is a statement of ignorance, not of equivalence: add overrides here as
+# soon as a gold pair shows a difference, and do not delete this file just
+# because it is empty -- its existence is what routes the font here.
+
+#inherit krutidev010

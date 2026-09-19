@@ -45,6 +45,24 @@ _SIGN = rf"[{SIGNS}]"
 _VOWEL = r"[ऄ-औॠॡॲ-ॷ]"
 _DEVANAGARI = r"[ऀ-ॿ꣠-ꣿ]"
 
+#: Words whose citation form genuinely ends in a virama -- common in official
+#: Hindi. Stored WITHOUT the trailing virama: the lookbehind is evaluated at
+#: the virama's own position, so it can only see the characters before it.
+#: Extend from your own corpus; `latters ingest --json` reports the contexts
+#: that fired this rule.
+_GENUINE_VIRAMA_FINAL = (
+    "एतद", "तहत", "विधिवत", "सम्यक", "महत", "जगत", "विद्युत",
+    "भवत", "श्रीमत", "किञ्चित", "पश्चात", "कदाचित", "बृहत",
+    "परिषद", "आयुष्मत", "विद्वत", "सक्षमत", "श्रीमान",
+)
+_NOT_GENUINE_FINAL = "".join(f"(?<!{w})" for w in _GENUINE_VIRAMA_FINAL)
+
+#: NOTE: the two word-initial rules compile with re.MULTILINE. Without it `^`
+#: anchors to the start of the whole document, so a word-initial matra was
+#: only ever detected if it was the first character of the entire text --
+#: which meant the single most important corruption signal fired essentially
+#: never. Found when a real archive file containing `िजला` scored "clean".
+#:
 #: Each rule is (name, compiled regex, weight, human-readable explanation).
 #: Weight is how many "error points" one occurrence contributes. Rules that
 #: are merely unusual carry a low weight; rules that are impossible in
@@ -52,7 +70,7 @@ _DEVANAGARI = r"[ऀ-ॿ꣠-ꣿ]"
 _RULES: list[tuple[str, re.Pattern[str], float, str]] = [
     (
         "matra_word_initial",
-        re.compile(rf"(?:^|(?<=[\s\n(\[]))(?:{_MATRA}|{VIRAMA}|{NUKTA})"),
+        re.compile(rf"(?:^|(?<=[\s\n(\[]))(?:{_MATRA}|{VIRAMA}|{NUKTA})", re.M),
         3.0,
         "dependent vowel sign or virama with nothing to attach to -- the classic "
         "symptom of pre-base ि not being reordered, or of PDF glyph reordering",
@@ -89,13 +107,15 @@ _RULES: list[tuple[str, re.Pattern[str], float, str]] = [
     ),
     (
         "sign_word_initial",
-        re.compile(rf"(?:^|(?<=[\s\n]))(?:{_SIGN})"),
+        re.compile(rf"(?:^|(?<=[\s\n]))(?:{_SIGN})", re.M),
         2.0,
         "anusvara / visarga / candrabindu at the start of a word",
     ),
     (
         "virama_word_final",
-        re.compile(rf"{VIRAMA}(?=[\s\n.,।॥)\]]|$)"),
+        # Excluding the genuine virama-final words keeps this rule pointed at
+        # real corruption instead of at correct official prose.
+        re.compile(_NOT_GENUINE_FINAL + rf"{VIRAMA}(?=[\s\n.,।॥)\]]|$)"),
         0.5,
         "virama at word end -- legitimate in some abbreviations, so low weight, "
         "but a high rate means half-forms are being emitted where full "

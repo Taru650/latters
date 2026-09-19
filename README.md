@@ -4,7 +4,10 @@ Fully offline. No cloud API, no telemetry, nothing leaves the machine.
 
 Target hardware and the full phase plan: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
-**Status: Phase 0 tooling ready to run; Phase 1 (conversion) implemented and tested.**
+**Status: Phase 0 measured, Phase 1 (conversion) and Phase 2 (segmentation)
+implemented and validated against a real district archive** — see
+[`docs/PHASE0_FINDINGS.md`](docs/PHASE0_FINDINGS.md) and
+[`docs/PHASE2_FINDINGS.md`](docs/PHASE2_FINDINGS.md).
 
 ---
 
@@ -67,6 +70,9 @@ latters ingest /path/to/archive --repair --rescue-latin -o ./converted
 | `gold.py` | Character-level regression harness against hand-verified pairs |
 | `goldbuild.py` | Mines review sheets from the archive, coverage-greedy selection, blind control, slot-coverage report |
 | `docx_writer.py` | Minimal stdlib DOCX writer (per-cell fonts) for the review sheet |
+| `anchors.py` | Structural anchors (letter number, subject, closing, …) as tunable data |
+| `segment.py` | One file → N letters; completeness and trust scoring |
+| `store.py` | SQLite corpus + FTS5 index (tokenizer configured for Devanagari) |
 | `cli.py` | `inventory`, `ingest`, `fonts convert/gold/tables` |
 
 ### The three things that make this non-trivial
@@ -204,4 +210,59 @@ To get them off the office machine and into the repo:
 git add -f docs/probe.txt docs/BASELINE.md
 git commit -m "Phase 0: baseline measurements from <machine>"
 git push
+```
+
+
+---
+
+## Phase 2 — one file → N letters
+
+```bash
+latters audit   /path/to/archive              # are the anchors right for THIS office?
+latters segment /path/to/archive --db corpus.db
+latters stats   --db corpus.db
+latters search  "अनुशासनिक कार्यवाही" --db corpus.db
+```
+
+On a real five-file district archive: **589 letters**, mean trust 0.87,
+42 exact duplicates deduped by content hash.
+
+### Run `latters audit` before trusting anything
+
+Segmentation keys off structural anchors — `पत्रांक`, `विषय:`, `प्रसंग:`,
+`विश्वासभाजन`. Every office has house style, and the patterns shipped here
+were written from general knowledge. Measured against the first real archive:
+
+| Anchor | Assumed | Actually used | Count |
+|---|---|---|---:|
+| salutation | महोदय | **महाशय** | 356 (महोदय: **0**) |
+| reference | संदर्भ | **प्रसंग** | 270 |
+| closing | आपका विश्वासभाजन | **विश्वासभाजन**, bare | 382 |
+
+Two anchors never fired. After tuning, letters found went 437 → 589 and the
+`repeated-subject` *fallback* went from **45% of boundaries to 2%** — a
+segmenter leaning on its safety net for half its decisions is guessing, not
+working. `latters audit` reports that ratio and warns above 15%.
+
+Extend the patterns without touching code:
+
+```python
+load_anchors({"closing": [r"इति\s+शुभम्"]})
+```
+
+### Two things the real archive taught us
+
+**Word splits words across runs.** A real paragraph arrived as run `'f'`
+(the pre-base i-matra, alone) then run `'tyk'`. Per-run conversion gave
+`िजला`, not `जिला`. Runs are coalesced before conversion now — reordering is
+a property of the text, not of the formatting runs it is stored in.
+
+**FTS5's default tokenizer destroys Devanagari.** `unicode61` counts only
+`L* N* Co` as token characters, so matras and virama are dropped as
+separators: `समीक्षा` indexes as `["सम","ष"]` and a search for `की` matches
+`कार्यवाही`. `remove_diacritics 0` does not help. The fix is
+`categories 'L* N* Mn Mc Co'`, pinned by a test.
+
+```bash
+python -m pytest tests/ -q      # 128 tests
 ```

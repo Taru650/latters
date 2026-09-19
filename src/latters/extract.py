@@ -41,7 +41,12 @@ def _register(names: str, table: str | None) -> None:
 # different ligature slots, but they share the Remington base layout, so they
 # all start on the base table and get overrides added as the gold set demands.
 _register("kruti dev 010,kruti dev 011,kruti dev 016,kruti dev 050,krutidev,kruti dev,kruti dev 010 condensed", "krutidev010")
-_register("devlys 010,devlys 020,devlys 040,devlys,dev lys 010", "devlys010")
+_register("devlys 010,devlys 020,devlys,dev lys 010", "devlys010")
+# Variants confirmed present in a real district archive. They share the
+# Remington base layout, so they inherit the base table; give each its own
+# file the moment a gold pair proves a slot differs.
+_register("devlys 040,devlys 050,dev lys 040", "devlys040")
+_register("kruti dev 041,kruti dev 045,kruti dev 040", "krutidev041")
 _register("chanakya,shree dev,shree-dev-0714,shivaji,agra,walkman-chanakya", "krutidev010")
 # Unicode Devanagari -- never convert these.
 _register("mangal,nirmala ui,noto sans devanagari,noto serif devanagari,aparajita,kokila,utsaah,sanskrit text,arial unicode ms,kalimati,samyak devanagari", None)
@@ -224,7 +229,7 @@ def convert_document(doc: Document, *, latin_digits: bool = False,
 
     for block in doc.blocks:
         pieces = []
-        for run in block.runs:
+        for run in _coalesce(block.runs, force_table):
             table = force_table if force_table else classify_font(run.font)[0]
             if table is None:
                 pieces.append(run.text)
@@ -259,12 +264,53 @@ def convert_document(doc: Document, *, latin_digits: bool = False,
     return normalize_devanagari("\n".join(out_blocks)), dict(used)
 
 
+def _coalesce(runs: list[Run], force_table: str | None) -> list[Run]:
+    """Merge adjacent runs that convert with the same table.
+
+    Word splits a paragraph into runs at revision-id and proofing boundaries
+    with no regard for word boundaries, so a single Hindi word routinely
+    arrives as several runs. Observed in a real archive file::
+
+        run 1: 'f'        <- the pre-base chhoti-i matra, alone
+        run 2: 'tyk'      <- the rest of जिला
+
+    Converting those separately puts ``ि`` at the end of one fragment and
+    ``जला`` at the start of the next, so the reordering pass never sees them
+    adjacent and the output is ``िजला`` instead of ``जिला``. The same applies
+    to reph, to multi-character slots such as ``'k``, and to any conjunct a
+    run boundary happens to fall inside.
+
+    Merging first is the only correct order: reordering is a property of the
+    text, not of the formatting runs it happens to be stored in.
+    """
+    out: list[Run] = []
+    for run in runs:
+        table = force_table if force_table else classify_font(run.font)[0]
+        if out:
+            prev_table = (force_table if force_table
+                          else classify_font(out[-1].font)[0])
+            if prev_table == table:
+                out[-1] = Run(out[-1].text + run.text, out[-1].font)
+                continue
+        out.append(Run(run.text, run.font))
+    return out
+
+
 #: A span of characters that are *only* uppercase Latin, digits and the
 #: punctuation used in file numbers. Kruti Dev Hindi is overwhelmingly
 #: lowercase (``Hkkjr``, ``dk;kZy;``), so a run of three or more of these with
 #: two or more capitals is almost certainly English or a file number that the
 #: typist left in the Hindi font by accident.
 _MISFONTED_RE = re.compile(r"[A-Z0-9./\-]{3,}")
+
+#: A rescued span must contain at least one of these. Legacy Devanagari
+#: produces plenty of all-caps runs -- `mi;qZDRk` (उपर्युक्त) contains the
+#: three-capital run `ZDR`, which the first version of this heuristic
+#: "rescued" straight into the output as Latin. Real file numbers and
+#: abbreviations essentially always carry a digit or a separator, so
+#: requiring one removes that whole class of false positive while keeping
+#: DEO/RPR/2024/1187 and F.No.
+_RESCUE_REQUIRES = re.compile(r"[0-9./\-]")
 
 
 def detect_misfonted_latin(text: str, *, min_uppercase: int = 2) -> list[tuple[int, int, str]]:
@@ -282,6 +328,7 @@ def detect_misfonted_latin(text: str, *, min_uppercase: int = 2) -> list[tuple[i
     out = []
     for m in _MISFONTED_RE.finditer(text):
         span = m.group(0)
-        if sum(1 for c in span if c.isupper()) >= min_uppercase:
+        if (sum(1 for c in span if c.isupper()) >= min_uppercase
+                and _RESCUE_REQUIRES.search(span)):
             out.append((m.start(), m.end(), span))
     return out

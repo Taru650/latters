@@ -10,6 +10,11 @@
     latters gold collect REVIEW.tsv      turn a filled sheet into a gold file
     latters gold coverage                which mapping slots are untested
     latters gold run                     the regression (same as `fonts gold`)
+
+    latters segment ARCHIVE --db X.db    convert, split into letters, score, store
+    latters audit ARCHIVE                anchor firing and boundary diagnostics
+    latters stats --db X.db              corpus health
+    latters search QUERY --db X.db       lexical search over the corpus
 """
 
 from __future__ import annotations
@@ -221,6 +226,142 @@ def cmd_gold_coverage(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+def _convert_all(root: Path, args) -> list[tuple[Path, str]]:
+    out = []
+    for path in _iter_files(root):
+        try:
+            doc = read_document(path)
+        except Exception:
+            continue
+        text, _ = convert_document(doc, latin_digits=getattr(args, "latin_digits", False),
+                                   rescue_latin=True)
+        text, _ = repair_text(text)
+        out.append((path, text))
+    return out
+
+
+def cmd_segment(args: argparse.Namespace) -> int:
+    from .segment import segment as split, trust, verdict
+    from .store import LetterRow, Store
+
+    converted = _convert_all(Path(args.path), args)
+    if not converted:
+        print("nothing readable in that path", file=sys.stderr)
+        return 1
+    vocab = build_vocabulary([t for _, t in converted], min_count=args.vocab_min)
+
+    rows: list[LetterRow] = []
+    per_file: list[tuple[str, int]] = []
+    for path, text in converted:
+        segments = split(text)
+        per_file.append((path.name, len(segments)))
+        for i, seg in enumerate(segments, 1):
+            q = assess(seg.text, vocabulary=vocab or None)
+            comp = seg.completeness()
+            score = trust(q.score, comp, args.tier)
+            rows.append(LetterRow(
+                source_file=path.name, seq=i, text=seg.text,
+                start_line=seg.start_line, end_line=seg.end_line,
+                source_tier=args.tier, conversion_confidence=q.score,
+                completeness=comp, trust=score, verdict=verdict(score),
+                opened_by=seg.opened_by, anchors=seg.anchors,
+                violations=q.violations, missing=seg.missing()))
+
+    for name, n in per_file:
+        print(f"  {name[:44]:46} {n:4d} letters")
+    buckets = Counter(r.verdict for r in rows)
+    print(f"\n{len(rows)} letters from {len(converted)} file(s); "
+          f"vocabulary {len(vocab)} words")
+    for v in ("index", "review", "quarantine"):
+        print(f"  {v:11} {buckets.get(v, 0)}")
+
+    if args.db:
+        with Store(args.db) as store:
+            ins, dup = store.add(rows)
+            print(f"\nstored {ins} new, {dup} already present -> {args.db}")
+            print("  " + json.dumps(store.stats(), ensure_ascii=False))
+    return 0
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Are the anchors right for THIS office? Run before trusting any output.
+
+    Every archive has house style. The sample archive this was first tuned
+    against says महाशय where the patterns assumed महोदय, and प्रसंग where they
+    assumed संदर्भ -- so two anchors never fired at all and the segmenter fell
+    back on a heuristic for 45% of its boundaries. This command surfaces that
+    in one pass instead of leaving it to be discovered downstream.
+    """
+    from .anchors import ANCHORS
+    from .segment import segment as split, tag_lines
+
+    converted = _convert_all(Path(args.path), args)
+    fired: Counter[str] = Counter()
+    reasons: Counter[str] = Counter()
+    lengths: list[int] = []
+    completeness: list[float] = []
+    for _, text in converted:
+        for line in tag_lines(text):
+            fired.update(line.anchors)
+        for seg in split(text):
+            reasons[seg.opened_by] += 1
+            lengths.append(seg.body_chars)
+            completeness.append(seg.completeness())
+
+    print(f"files {len(converted)}   letters {sum(reasons.values())}\n")
+    print("anchor firing (lines)")
+    for a in ANCHORS:
+        n = fired.get(a.name, 0)
+        flag = "   <-- NEVER FIRED: the pattern is wrong for this office" if not n else ""
+        print(f"  {a.name:14} {n:6d}{flag}")
+
+    total = sum(reasons.values()) or 1
+    print("\nboundary cause")
+    for r, n in reasons.most_common():
+        print(f"  {r:28} {n:5d}  {n/total:5.1%}")
+    fallback = reasons.get("repeated-subject", 0) / total
+    if fallback > 0.15:
+        print(f"\n!! {fallback:.0%} of boundaries came from the repeated-subject "
+              "fallback.\n!! That means the closing anchors are not matching this "
+              "office's sign-off\n!! formula. Fix those before trusting the "
+              "segmentation -- the fallback\n!! is a safety net, not a "
+              "segmentation strategy.")
+
+    if lengths:
+        lengths.sort(); completeness.sort()
+        def pct(xs, p): return xs[min(len(xs) - 1, int(len(xs) * p))]
+        print(f"\nletter length  p05={pct(lengths,.05)} median={pct(lengths,.5)} "
+              f"p95={pct(lengths,.95)} max={lengths[-1]}")
+        print(f"completeness   p10={pct(completeness,.1)} median={pct(completeness,.5)} "
+              f"perfect={sum(1 for c in completeness if c >= 1.0)}")
+        if lengths[-1] > 5 * pct(lengths, .95):
+            print(f"\n!! The longest segment ({lengths[-1]} chars) is far above p95 "
+                  f"({pct(lengths,.95)}).\n!! That is almost certainly several "
+                  "letters that never got split.")
+    return 0
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    from .store import Store
+    with Store(args.db) as store:
+        print(json.dumps(store.stats(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    from .store import Store
+    with Store(args.db) as store:
+        hits = store.search(args.query, limit=args.limit, min_trust=args.min_trust)
+    if not hits:
+        print("no matches")
+        return 1
+    for h in hits:
+        first = h["text"].splitlines()[0][:70]
+        print(f"[{h['id']:5}] trust={h['trust']:.2f} {h['source_file'][:26]:28} {first}")
+    return 0
+
+
+# --------------------------------------------------------------------------
 def cmd_inventory(args: argparse.Namespace) -> int:
     """Phase 1.1: how much of this archive is legacy, and in which fonts?
 
@@ -410,6 +551,29 @@ def build_parser() -> argparse.ArgumentParser:
     gr.add_argument("--threshold", type=float, default=0.98)
     gr.add_argument("--show", type=int, default=20)
     gr.set_defaults(func=cmd_gold)
+
+    seg = sub.add_parser("segment", help="split an archive into individual letters")
+    seg.add_argument("path")
+    seg.add_argument("--db", default=None, help="SQLite file to store letters in")
+    seg.add_argument("--tier", default="docx", choices=["unicode", "docx", "pdf", "ocr"])
+    seg.add_argument("--latin-digits", action="store_true")
+    seg.add_argument("--vocab-min", type=int, default=3)
+    seg.set_defaults(func=cmd_segment)
+
+    aud = sub.add_parser("audit", help="are the anchors right for this office?")
+    aud.add_argument("path")
+    aud.add_argument("--latin-digits", action="store_true")
+    aud.set_defaults(func=cmd_audit)
+
+    st = sub.add_parser("stats", help="corpus health")
+    st.add_argument("--db", required=True)
+    st.set_defaults(func=cmd_stats)
+
+    se = sub.add_parser("search", help="lexical search over the corpus")
+    se.add_argument("query"); se.add_argument("--db", required=True)
+    se.add_argument("--limit", type=int, default=10)
+    se.add_argument("--min-trust", type=float, default=0.6)
+    se.set_defaults(func=cmd_search)
 
     inv = sub.add_parser("inventory", help="Phase 1.1 archive triage")
     inv.add_argument("path"); inv.add_argument("--json", action="store_true")
