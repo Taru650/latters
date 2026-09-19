@@ -1,0 +1,25 @@
+[project]
+name = "latters"
+version = "0.1.0"
+description = "Offline departmental letter drafting assistant"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# Kept deliberately empty for Phase 1: conversion + inventory run on the
+# standard library alone, so the ingest CLI works on a locked-down office
+# machine with no wheels available. Later phases add onnxruntime-directml etc.
+dev = ["pytest>=7"]
+
+[project.scripts]
+latters = "latters.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+latters = ["data/fonts/*.tsv"]

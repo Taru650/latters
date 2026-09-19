@@ -1,0 +1,171 @@
+# Kruti Dev 010 -> Unicode Devanagari mapping table
+#
+# !!! VERIFY THIS TABLE AGAINST YOUR OWN ARCHIVE BEFORE TRUSTING IT !!!
+# Kruti Dev ships in many variants (010, 011, 016, 050, ...) whose ligature
+# slots differ. This table encodes the common Remington-layout 010 mapping.
+# Run `latters fonts gold` after adding ~200 hand-verified pairs from your
+# real letters; anything wrong here shows up immediately as a failing pair.
+#
+# Format:  legacy<TAB>unicode<TAB>comment
+# Matching is maximal-munch (longest legacy string wins), so entry order in
+# this file does not matter -- the loader sorts by length descending.
+#
+# Two legacy characters are NOT literal and are handled by reordering passes
+# in convert.py, not by this table alone:
+#   f  -> U+093F chhoti-i matra, stored BEFORE its cluster, must move after
+#   Z  -> reph, stored AFTER its cluster, must become U+0930 U+094D before it
+# They appear below with their naive Unicode value; convert.py fixes position.
+
+#--- independent vowels -------------------------------------------------
+v	अ	a
+vk	आ	aa
+b	इ	i
+bZ	ई	ii  (b + reph slot; special-cased before reph pass)
+m	उ	u
+Å	ऊ	uu
+_	ऋ	ri
+,	ए	e
+,s	ऐ	ai
+vks	ओ	o
+vkS	औ	au
+
+#--- consonants: full forms ---------------------------------------------
+d	क	ka
+[k	ख	kha
+x	ग	ga
+?k	घ	gha
+Ä	ङ	nga
+p	च	cha
+N	छ	chha
+t	ज	ja
+>k	झ	jha
+¥	ञ	nya
+V	ट	tta
+B	ठ	ttha
+M	ड	dda
+<	ढ	ddha
+.k	ण	nna
+r	त	ta
+Fk	थ	tha
+n	द	da
+/k	ध	dha
+u	न	na
+i	प	pa
+Q	फ	pha
+c	ब	ba
+Hk	भ	bha
+e	म	ma
+;	य	ya
+j	र	ra
+y	ल	la
+o	व	va
+'k	श	sha
+"k	ष	ssa
+l	स	sa
+g	ह	ha
+
+#--- consonants: half forms (dedicated glyph slots) ----------------------
+D	क्	ka + virama
+[	ख्	kha + virama
+X	ग्	ga + virama
+?	घ्	gha + virama
+P	च्	cha + virama
+T	ज्	ja + virama
+>	झ्	jha + virama
+.	ण्	nna + virama  (this is why raw ASCII periods look like garbage)
+R	त्	ta + virama
+F	थ्	tha + virama
+/	ध्	dha + virama
+U	न्	na + virama
+I	प्	pa + virama
+C	ब्	ba + virama
+H	भ्	bha + virama
+E	म्	ma + virama
+Y	ल्	la + virama
+O	व्	va + virama
+'	श्	sha + virama
+"	ष्	ssa + virama
+L	स्	sa + virama
+
+#--- conjunct ligatures with dedicated slots -----------------------------
+{k	क्ष	ksha
+{	क्ष्	ksha + virama
+«	त्र	tra
+K	ज्ञ	gya
+# REMOVED: `Kk` -> ज्ञ. It shadowed the correct maximal-munch parse of
+# ज्ञापन (`Kkiu` = K + k + i + u = ज्ञ + ा + प + न), silently dropping the
+# aa-matra. Caught by the gold set. Do not re-add without a failing case.
+Ø	क्र	kra
+ø	क्र	kra (lowercase slot)
+|	द्य	dya
+}	द्व	dva
+æ	द्र	dra
+Ük	श्र	shra
+Ü	श्र्	shra + virama
+#	रु	ru
+:	रू	ruu
+Ř	ट्ट	tta+tta
+Ê	ट्ट	tta+tta (alt slot)
+Ë	ट्ठ	tta+ttha
+Ï	ड्ड	dda+dda
+Ð	ड्ढ	dda+ddha
+ã	ह्म	hma
+º	ह्	ha + virama
+â	ह्य	hya
+ºz	ह्र	hra
+
+#--- ra-below (subjoined ra) and ra-above (reph) -------------------------
+z	्र	subjoined ra, post-base in BOTH encodings -> no reorder needed
+ª	्र	subjoined ra, variant slot used after tta/ttha/dda
+Z	र्	REPH -- position fixed by the reph pass in convert.py
+
+#--- dependent vowel signs (matras) --------------------------------------
+k	ा	aa matra
+f	ि	i matra -- PRE-BASE in legacy, position fixed by convert.py
+h	ी	ii matra
+q	ु	u matra
+w	ू	uu matra
+`	ृ	ri matra
+s	े	e matra
+S	ै	ai matra
+ks	ो	o matra
+kS	ौ	au matra
+
+#--- signs ----------------------------------------------------------------
+a	ं	anusvara
+¡	ँ	chandrabindu
+%	ः	visarga
+~	्	explicit virama
+\	़	nukta
++	़	nukta (alternate slot)
+A	।	danda / purna viram
+AA	॥	double danda
+·	ॐ	om
+
+#--- punctuation and bracket slots ---------------------------------------
+# These are the slots most often missed by hand-rolled converters, because
+# the legacy character looks like ordinary ASCII punctuation and gets passed
+# through untouched. `=` is the big one: पत्र is typed `i=`.
+=	त्र	tra (primary slot -- पत्र = i=)
+&	-	hyphen
+]	,	comma (Kruti Dev has no ASCII comma; `,` is the ए slot)
+¼	(	opening paren
+½	)	closing paren
+^^	“	opening double quote
+**	”	closing double quote
+^	‘	opening single quote
+*	’	closing single quote
+W	ॉ	candra-o matra (ऑ = vkW)
+
+#--- digits (Kruti Dev renders ASCII digits as Devanagari digits) ---------
+# Disable with --latin-digits if your archive was typed with Latin numerals.
+0	०	digit 0
+1	१	digit 1
+2	२	digit 2
+3	३	digit 3
+4	४	digit 4
+5	५	digit 5
+6	६	digit 6
+7	७	digit 7
+8	८	digit 8
+9	९	digit 9

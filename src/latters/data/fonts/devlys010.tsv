@@ -1,0 +1,18 @@
+# DevLys 010 -> Unicode Devanagari mapping table
+#
+# DevLys shares the Remington keystroke layout with Kruti Dev, so the bulk of
+# the table is identical. This file inherits Kruti Dev 010 and lists only the
+# slots that are known to differ. Add overrides here as your gold set finds
+# them -- do NOT fork the whole table.
+#
+# !!! The override list below is a STARTING POINT and is the least-verified
+# !!! part of this codebase. Treat every DevLys conversion as suspect until
+# !!! you have gold pairs covering it.
+
+#inherit krutidev010
+
+#--- known DevLys 010 slot differences ------------------------------------
+Ï	ट्ट	DevLys uses this slot for tta+tta, KrutiDev for dda+dda
+Ð	ट्ठ	DevLys tta+ttha
+ƒ	द्ध	DevLys dhha ligature
+„	द्ग	DevLys dga ligature
