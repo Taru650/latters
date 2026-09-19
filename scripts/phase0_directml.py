@@ -58,7 +58,32 @@ def bench(model: bytes, providers, label: str) -> None:
           f"({sess.get_providers()[0]})")
 
 
+class _Tee:
+    """Print to the console and to a file at once.
+
+    The benchmark table scrolls off the top of a small terminal behind the
+    explanatory footer, so the result gets lost. Writing a file as well makes
+    the output survive and makes it committable next to BASELINE.md.
+    """
+
+    def __init__(self, path):
+        self.file = open(path, "w", encoding="utf-8")
+
+    def write(self, s):
+        sys.__stdout__.write(s)
+        self.file.write(s)
+
+    def flush(self):
+        sys.__stdout__.flush()
+        self.file.flush()
+
+
 def main() -> int:
+    from pathlib import Path
+    out_path = Path("docs/directml.txt")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sys.stdout = _Tee(out_path)
+
     print("available providers:", ort.get_available_providers())
     if "DmlExecutionProvider" not in ort.get_available_providers():
         print("\nDirectML provider is NOT available.")
@@ -88,6 +113,8 @@ How to read this
 
   If a device is UNAVAILABLE, check its driver in the probe output. On GCN-era
   Radeons you may need the last legacy Adrenalin release for the family.""")
+    print(f"\n[written to {out_path} -- commit it with: git add -f {out_path}]")
+    sys.stdout.flush()
     return 0
 
 
