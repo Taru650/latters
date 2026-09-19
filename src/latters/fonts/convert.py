@@ -57,6 +57,10 @@ class Conversion:
     #: wrong for this font -- investigate before trusting the output.
     unmapped: dict[str, int]
     table: str
+    #: Which mapping-table keys this text actually exercised. Gold-set
+    #: selection uses it to pick lines that cover slots nothing else covers,
+    #: and the coverage report uses it to name the slots nothing tests.
+    used_keys: frozenset[str] = frozenset()
 
 
 class Converter:
@@ -77,9 +81,11 @@ class Converter:
 
         unmapped: dict[str, int] = {}
         matched_spans: list[tuple[int, int]] = []
+        used: set[str] = set()
 
         def _sub(m: re.Match[str]) -> str:
             matched_spans.append(m.span())
+            used.add(m.group(0))
             return self.table.mapping[m.group(0)]
 
         out = self._pattern.sub(_sub, text)
@@ -102,7 +108,7 @@ class Converter:
 
         if normalize:
             out = normalize_devanagari(out)
-        return Conversion(out, unmapped, self.table.name)
+        return Conversion(out, unmapped, self.table.name, frozenset(used))
 
 
 #: U+0958..U+095F (क़ ख़ ग़ ज़ ड़ ढ़ फ़ य़) are Unicode composition exclusions: NFC

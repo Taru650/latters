@@ -65,6 +65,8 @@ latters ingest /path/to/archive --repair --rescue-latin -o ./converted
 | `validate.py` | Deterministic illegal-sequence detector → `conversion_confidence` |
 | `repair.py` | Visarga-typed-as-colon and punctuation spacing |
 | `gold.py` | Character-level regression harness against hand-verified pairs |
+| `goldbuild.py` | Mines review sheets from the archive, coverage-greedy selection, blind control, slot-coverage report |
+| `docx_writer.py` | Minimal stdlib DOCX writer (per-cell fonts) for the review sheet |
 | `cli.py` | `inventory`, `ingest`, `fonts convert/gold/tables` |
 
 ### The three things that make this non-trivial
@@ -106,21 +108,68 @@ rate > sequence rules.
 
 ### The gold set is the deliverable that matters
 
-`tests/gold/seed_krutidev010.tsv` has 51 pairs, and they pass at 100%
-character accuracy — but they were derived from the mapping table's own logic,
-so they prove the **engine** works and say nothing about whether the **table**
-is right for your archive.
+`tests/gold/seed_krutidev010.tsv` has 51 pairs passing at 100% character
+accuracy. Two reasons that number means less than it looks:
 
-Before Phase 2, build the real one:
+- The pairs were derived from the mapping table's own logic, so they prove the
+  **engine** works and say nothing about whether the **table** is right.
+- `latters gold coverage` reports that they exercise **63 of 129 mapping slots
+  (49%)**. Sixty-six slots — including `ढ`, `झ्`, `ष्`, `रु`, `रू`, the nukta
+  and half the digits — are tested by nothing at all. A wrong mapping in any
+  of them passes the regression silently.
 
-1. Open a real letter in Word with the legacy font installed.
-2. Copy the raw ASCII (switch the font to Courier to see it) → `legacy` column.
-3. A Hindi reader types what the page actually says → `expected` column.
-4. 200 lines, spanning every department and decade, weighted toward conjuncts,
-   reph, chhoti-i, numerals and file numbers.
-5. Save as `tests/gold/office_<name>.tsv`; `latters fonts gold` picks it up.
+#### Building the real one
 
-Ship nothing below 98% character accuracy.
+```bash
+# 1. Mine a review sheet from the archive
+latters gold extract /path/to/archive -o review/ -n 200 --blind-fraction 0.2
+
+# 2. A Hindi reader fills review/review.tsv (see below)
+
+# 3. Turn it into a gold file
+latters gold collect review/review.tsv -o tests/gold/office_raipur.tsv
+
+# 4. Check it
+latters gold run
+latters gold coverage
+```
+
+`gold extract` writes two files:
+
+| File | Role |
+|---|---|
+| `review.docx` | Two columns: the line in its **original legacy font** (the ground truth — the font must be installed to read it) beside our Unicode conversion. The reviewer compares visually. |
+| `review.tsv` | The form, UTF-8-BOM so Excel opens Devanagari correctly. Per row, write `ok` or the corrected Hindi. |
+
+Two things it does that a hand-built set would not:
+
+**Coverage-greedy selection, not random sampling.** 200 random lines are mostly
+the same boilerplate and leave rare conjuncts and ligature slots untested.
+Selection repeatedly takes the line covering the most as-yet-uncovered mapping
+slots, so the set is smaller *and* tests more. `gold extract` reports how many
+of the slots your archive actually uses are covered.
+
+**A blind control against rubber-stamping.** Showing the reviewer our
+conversion makes the work fast but invites approving plausible-looking wrong
+output. So a random 20% of rows show no suggestion in either file — the reader
+transcribes those from the legacy rendering alone. `gold collect` then compares
+disagreement rates:
+
+```
+disagreed with the converter:
+  sighted  0/7 (0.0%)
+  blind    1/3 (33.3%)
+
+!! The blind rows were corrected far more often than the sighted ones.
+!! That is the signature of rubber-stamping...
+```
+
+If the blind rows disagree far more often than the sighted ones, the sighted
+rows were being approved rather than checked, and the set has to be redone.
+
+Ship nothing below 98% character accuracy **and** high slot coverage. The two
+are independent: accuracy says the tested slots are right, coverage says how
+many were tested.
 
 ```bash
 python -m pytest tests/ -q      # 44 tests

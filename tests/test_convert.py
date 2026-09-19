@@ -225,3 +225,231 @@ def test_full_pipeline(tmp_path):
     assert "कार्यालय" in text and "विषय:" in text and "भवदीय" in text
     assert "(R. K. Sharma)" in text
     assert assess(text).verdict in ("clean", "review")
+
+
+# --- gold-set builder -----------------------------------------------------
+import csv as _csv
+
+from latters import docx_writer as _D
+from latters.goldbuild import (Candidate, collect_review, coverage, mark_blind,
+                               mine_candidates, select_by_coverage, write_gold,
+                               write_review_docx, write_review_tsv)
+
+
+def _archive(tmp_path):
+    root = tmp_path / "archive"
+    build(root / "a.docx", SAMPLE_LETTER)
+    build(root / "b.docx", [
+        [("dk;kZy; vk;qDr] uxj fuxe", "DevLys 010")],
+        [("fo\"k;% vkosnu vxzsf\"kr djus ckcr A", "DevLys 010")],
+    ])
+    build(root / "c.docx", [[("कार्यालय आदेश संख्या 44/2022", "Mangal")]])
+    return root
+
+
+def test_mine_skips_unicode_and_short_runs(tmp_path):
+    cands, problems = mine_candidates(_archive(tmp_path))
+    assert cands and not problems
+    assert all(c.table in ("krutidev010", "devlys010") for c in cands)
+    assert all(12 <= len(c.legacy) <= 140 for c in cands)
+    # The Mangal paragraph is already Unicode and must not be offered.
+    assert not any("कार्यालय आदेश" in c.legacy for c in cands)
+
+
+def test_mine_deduplicates(tmp_path):
+    root = tmp_path / "dup"
+    line = [("dk;kZy; ftyk f'k{kk vf/kdkjh] jk;iqj", "Kruti Dev 010")]
+    build(root / "x.docx", [line])
+    build(root / "y.docx", [line])
+    cands, _ = mine_candidates(root)
+    assert len(cands) == 1
+
+
+def test_selection_is_coverage_greedy(tmp_path):
+    cands, _ = mine_candidates(_archive(tmp_path))
+    chosen = select_by_coverage(cands, 3)
+    assert len(chosen) <= 3
+    # Greedy means the first pick contributes the most novel slots.
+    assert len(chosen[0].novel) == max(len(c.novel) for c in chosen)
+    # Selection must beat taking the first N in arbitrary order.
+    greedy_keys = set().union(*(c.keys for c in chosen))
+    naive_keys = set().union(*(c.keys for c in cands[:3]))
+    assert len(greedy_keys) >= len(naive_keys)
+
+
+def test_selection_is_deterministic(tmp_path):
+    cands, _ = mine_candidates(_archive(tmp_path))
+    a = [c.legacy for c in select_by_coverage(cands, 5, seed=7)]
+    cands2, _ = mine_candidates(_archive(tmp_path))
+    b = [c.legacy for c in select_by_coverage(cands2, 5, seed=7)]
+    assert a == b
+
+
+def test_mark_blind_fraction():
+    cs = [Candidate(legacy=f"line{i}", table="krutidev010", font="f", source="s")
+          for i in range(20)]
+    assert mark_blind(cs, 0.25) == 5
+    assert sum(c.blind for c in cs) == 5
+
+
+def test_review_docx_keeps_the_legacy_font(tmp_path):
+    """The left column is the ground truth, so it must carry the legacy font
+    or the reviewer has nothing to read."""
+    cands, _ = mine_candidates(_archive(tmp_path))
+    chosen = select_by_coverage(cands, 4)
+    path = write_review_docx(chosen, tmp_path / "review.docx")
+    doc = read_document(path)
+    assert doc.font_histogram["Kruti Dev 010"] > 0
+    assert doc.font_histogram["Mangal"] > 0
+
+
+def test_review_tsv_hides_suggestion_on_blind_rows(tmp_path):
+    cands, _ = mine_candidates(_archive(tmp_path))
+    chosen = select_by_coverage(cands, 6)
+    for c in chosen[:2]:
+        c.blind = True
+    path = write_review_tsv(chosen, tmp_path / "review.tsv")
+    rows = list(_csv.DictReader(path.read_text(encoding="utf-8-sig").splitlines(),
+                                delimiter="\t"))
+    blind = [r for r in rows if r["blind"]]
+    assert len(blind) == 2
+    assert all(r["suggested"] == "" for r in blind)
+    assert all(r["suggested"] for r in rows if not r["blind"])
+
+
+def _write_filled(tmp_path, rows, name="filled.tsv", encoding="utf-8-sig"):
+    path = tmp_path / name
+    with path.open("w", encoding=encoding, newline="") as fh:
+        w = _csv.DictWriter(fh, fieldnames=list(rows[0]), delimiter="\t")
+        w.writeheader()
+        w.writerows(rows)
+    return path
+
+
+def _sheet(tmp_path, n=8):
+    cands, _ = mine_candidates(_archive(tmp_path))
+    chosen = select_by_coverage(cands, n)
+    for c in chosen[:3]:
+        c.blind = True
+    p = write_review_tsv(chosen, tmp_path / "review.tsv")
+    return list(_csv.DictReader(p.read_text(encoding="utf-8-sig").splitlines(),
+                                delimiter="\t"))
+
+
+def test_collect_counts_disagreement_not_typing(tmp_path):
+    """Regression: a blind reviewer must type on every row, so counting typed
+    rows made the blind disagreement rate 100% by construction and the
+    rubber-stamping control useless."""
+    rows = _sheet(tmp_path)
+    conv = Converter()
+    for r in rows:
+        r["verdict_or_correction"] = conv.convert(r["legacy"]).text
+    col = collect_review(_write_filled(tmp_path, rows))
+    assert col.n_typed == len(rows)
+    assert col.blind_disagreement == 0.0     # typed, but agreed
+    assert col.sighted_disagreement == 0.0
+
+
+def test_collect_counts_add_up(tmp_path):
+    """Regression: blind rows were incremented twice, so sighted+blind
+    exceeded the number of pairs."""
+    rows = _sheet(tmp_path)
+    for r in rows:
+        r["verdict_or_correction"] = "ok" if not r["blind"] else "कुछ"
+    col = collect_review(_write_filled(tmp_path, rows))
+    assert col.n_sighted + col.n_blind == len(col.pairs)
+
+
+def test_collect_detects_rubber_stamping(tmp_path):
+    rows = _sheet(tmp_path)
+    conv = Converter()
+    for r in rows:
+        if r["blind"]:
+            r["verdict_or_correction"] = conv.convert(r["legacy"]).text + "क"
+        else:
+            r["verdict_or_correction"] = "ok"
+    col = collect_review(_write_filled(tmp_path, rows))
+    assert col.sighted_disagreement == 0.0
+    assert col.blind_disagreement == 1.0
+
+
+def test_collect_rejects_ok_on_a_blind_row(tmp_path):
+    rows = _sheet(tmp_path)
+    for r in rows:
+        r["verdict_or_correction"] = "ok"
+    col = collect_review(_write_filled(tmp_path, rows))
+    assert any("blind row" in p for p in col.problems)
+    assert col.n_blind == 0
+
+
+def test_collect_excludes_unreviewed_rows(tmp_path):
+    rows = _sheet(tmp_path)
+    sighted = next(r for r in rows if not r["blind"])
+    sighted["verdict_or_correction"] = "ok"
+    col = collect_review(_write_filled(tmp_path, rows))
+    assert col.n_blank == len(rows) - 1
+    assert len(col.pairs) == 1
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "utf-8"])
+def test_collect_survives_excel_encodings(tmp_path, encoding):
+    """Excel writes TSV as UTF-16 or ANSI depending on how it was saved."""
+    rows = _sheet(tmp_path, 4)
+    for r in rows:
+        r["verdict_or_correction"] = "ok" if not r["blind"] else "कार्यालय"
+    col = collect_review(_write_filled(tmp_path, rows, f"f_{encoding}.tsv", encoding))
+    assert col.pairs
+    assert all("�" not in legacy for legacy, *_ in col.pairs)
+
+
+def test_collect_reports_missing_columns(tmp_path):
+    p = tmp_path / "bad.tsv"
+    p.write_text("a\tb\n1\t2\n", encoding="utf-8")
+    assert collect_review(p).problems
+
+
+def test_collected_gold_file_is_readable_by_the_harness(tmp_path):
+    rows = _sheet(tmp_path)
+    conv = Converter()
+    for r in rows:
+        r["verdict_or_correction"] = conv.convert(r["legacy"]).text
+    col = collect_review(_write_filled(tmp_path, rows))
+    out = write_gold(col, tmp_path / "office_x.tsv", title="x")
+    report = run_gold([out])
+    assert report.n == len(col.pairs)
+    assert report.char_accuracy == 1.0
+
+
+def test_coverage_names_untested_slots():
+    pairs = [("d", "क", "krutidev010", "")]
+    cov = coverage(pairs, "krutidev010")
+    assert "d" in cov.covered
+    assert "Z" in cov.uncovered          # reph untested by this one pair
+    assert 0 < cov.fraction < 1
+
+
+def test_seed_gold_set_coverage_is_honestly_partial():
+    """The seed set passes at 100% accuracy while exercising about half the
+    table. Keeping this visible is the point of the coverage report."""
+    from latters.gold import discover, load_pairs
+    pairs = [p for path in discover() for p in load_pairs(path)]
+    cov = coverage(pairs, "krutidev010")
+    assert cov.fraction < 0.75, "if this rises, update the README claim"
+    assert cov.uncovered
+
+
+# --- docx writer ----------------------------------------------------------
+def test_docx_writer_roundtrips_fonts(tmp_path):
+    path = _D.write(tmp_path / "t.docx", [
+        _D.heading("H"),
+        _D.table([[[_D.para(_D.run("dk;", "Kruti Dev 010"))],
+                   [_D.para(_D.run("कार्य", "Mangal"))]]], [4000, 4000]),
+    ])
+    doc = read_document(path)
+    assert doc.font_histogram["Kruti Dev 010"] == 3
+    assert doc.font_histogram["Mangal"] == 5
+
+
+def test_docx_writer_escapes_xml(tmp_path):
+    path = _D.write(tmp_path / "e.docx", [_D.para(_D.run('a<b>&"c"', "Calibri"))])
+    assert 'a<b>&"c"' in read_document(path).blocks[0].raw_text
