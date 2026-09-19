@@ -19,6 +19,9 @@
     latters fields  ARCHIVE|--db X.db    field extraction coverage
     latters classify --db X.db           bootstrap labels, cross-validate, store
     latters templates --db X.db          mine per-cell skeletons
+
+    latters retrieve REQUEST --db X.db   find the letters to draft from
+    latters eval --db X.db               measure retrieval against baselines
 """
 
 from __future__ import annotations
@@ -487,6 +490,106 @@ def cmd_templates(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+def _build_retriever(store, *, dense_model: str | None = None):
+    from .retrieve import DenseIndex, Retriever, TfidfIndex, load_letters
+
+    letters = load_letters(store.db)
+    if not letters:
+        return None, []
+    tfidf = TfidfIndex().fit(letters)
+    dense = None
+    if dense_model:
+        from .encoders import OnnxEncoder
+        dense = DenseIndex(OnnxEncoder(dense_model)).fit(letters)
+    return Retriever(store.db, letters, tfidf=tfidf, dense=dense), letters
+
+
+def cmd_retrieve(args: argparse.Namespace) -> int:
+    from .retrieve import Filters
+    from .store import Store
+
+    with Store(args.db) as store:
+        retriever, letters = _build_retriever(store, dense_model=args.dense_model)
+        if retriever is None:
+            print("corpus is empty", file=sys.stderr)
+            return 1
+        use = tuple(args.use)
+        filters = Filters(department=args.department, letter_type=args.letter_type,
+                          min_trust=args.min_trust)
+        hits = retriever.search(args.request, filters=filters,
+                                limit=args.limit, use=use)
+
+    if not hits:
+        print("nothing matched. Try dropping --department, or lowering "
+              "--min-trust.", file=sys.stderr)
+        return 1
+    for i, h in enumerate(hits, 1):
+        l = h.letter
+        headline = l.subject or l.text.splitlines()[0]
+        print(f"\n[{i}] letter {l.id}  score {h.score:.4f}  trust {l.trust:.2f}")
+        print(f"    {l.department or '?'} / {l.letter_type or '?'}   "
+              f"{l.source_file}   ranks={h.ranks}")
+        print(f"    {headline[:96]}")
+        if args.full:
+            for line in l.text.splitlines()[:12]:
+                print(f"      {line[:96]}")
+    print("\nTrust and source are shown on every hit deliberately: a draft is "
+          "only\nas good as the letters it was built from, and the clerk has "
+          "to be able\nto see which ones those were.")
+    return 0
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    from .evaluate import build_queries, evaluate, random_baseline, render
+    from .store import Store
+
+    with Store(args.db) as store:
+        retriever, letters = _build_retriever(store)
+        if retriever is None:
+            print("corpus is empty", file=sys.stderr)
+            return 1
+        queries = build_queries(letters, min_cell=args.min_cell)
+        if len(queries) < 30:
+            print(f"only {len(queries)} evaluable queries -- too few to "
+                  "distinguish configurations. Ingest more of the archive.",
+                  file=sys.stderr)
+        print(f"{len(letters)} letters, {len(queries)} evaluable queries "
+              f"(subject present, {args.min_cell}+ cell-mates)")
+
+        configs = [
+            ("bm25", ("bm25",), False, False),
+            ("bm25 + dept", ("bm25",), True, False),
+            ("tfidf", ("tfidf",), False, False),
+            ("tfidf + dept", ("tfidf",), True, False),
+            ("rrf(bm25,tfidf)", ("bm25", "tfidf"), False, False),
+            ("rrf + dept", ("bm25", "tfidf"), True, False),
+            ("rrf + dept + type", ("bm25", "tfidf"), True, True),
+        ]
+        for label, keep in (("FULL subject (verbatim -- favours lexical)", None),
+                            (f"DEGRADED {args.degrade:.0%} (the realistic condition)",
+                             args.degrade)):
+            results = [random_baseline(letters, queries)]
+            for name, use, fd, ft in configs:
+                results.append(evaluate(retriever, queries, name=name, use=use,
+                                        filter_department=fd, filter_type=ft,
+                                        degrade_keep=keep))
+            print(f"\n=== {label} ===")
+            print(render(results))
+
+    print("""
+Both tasks are proxies, not the real one. Known-item recall is inflated
+because the query is verbatim text from the target. Same-cell precision uses
+the Phase 3 classifier's labels as ground truth, and those cross-validated at
+0.81 macro-F1 for department and 0.64 for letter type -- so its ceiling is
+well under 1.0 and some misses are mislabels.
+
+The real evaluation is forty requests a clerk writes, with the letters they
+would actually have wanted. Until that exists, read these as relative
+comparisons between configurations, never as absolute quality.""")
+    return 0
+
+
+# --------------------------------------------------------------------------
 def cmd_inventory(args: argparse.Namespace) -> int:
     """Phase 1.1: how much of this archive is legacy, and in which fonts?
 
@@ -720,6 +823,26 @@ def build_parser() -> argparse.ArgumentParser:
     tp.add_argument("-o", "--out", default=None, help="directory to write skeletons to")
     tp.add_argument("--show", action="store_true", help="print the largest skeleton")
     tp.set_defaults(func=cmd_templates)
+
+    rt = sub.add_parser("retrieve", help="find the letters to draft from")
+    rt.add_argument("request")
+    rt.add_argument("--db", required=True)
+    rt.add_argument("--limit", type=int, default=5)
+    rt.add_argument("--department", default=None)
+    rt.add_argument("--letter-type", default=None)
+    rt.add_argument("--min-trust", type=float, default=0.6)
+    rt.add_argument("--use", nargs="+", default=["bm25", "tfidf"],
+                    choices=["bm25", "tfidf", "dense"])
+    rt.add_argument("--dense-model", default=None,
+                    help="directory holding an ONNX encoder (see encoders.py)")
+    rt.add_argument("--full", action="store_true", help="print letter bodies")
+    rt.set_defaults(func=cmd_retrieve)
+
+    ev = sub.add_parser("eval", help="measure retrieval against baselines")
+    ev.add_argument("--db", required=True)
+    ev.add_argument("--min-cell", type=int, default=5)
+    ev.add_argument("--degrade", type=float, default=0.5)
+    ev.set_defaults(func=cmd_eval)
 
     inv = sub.add_parser("inventory", help="Phase 1.1 archive triage")
     inv.add_argument("path"); inv.add_argument("--json", action="store_true")

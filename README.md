@@ -4,11 +4,12 @@ Fully offline. No cloud API, no telemetry, nothing leaves the machine.
 
 Target hardware and the full phase plan: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
-**Status: Phase 0 measured, Phases 1-3 (conversion, segmentation,
-classification) implemented and validated against a real district archive** — see
+**Status: Phase 0 measured, Phases 1-4 (conversion, segmentation,
+classification, retrieval) implemented and validated against a real district archive** — see
 [`docs/PHASE0_FINDINGS.md`](docs/PHASE0_FINDINGS.md) and
 [`docs/PHASE2_FINDINGS.md`](docs/PHASE2_FINDINGS.md) and
-[`docs/PHASE3_FINDINGS.md`](docs/PHASE3_FINDINGS.md).
+[`docs/PHASE3_FINDINGS.md`](docs/PHASE3_FINDINGS.md) and
+[`docs/PHASE4_FINDINGS.md`](docs/PHASE4_FINDINGS.md).
 
 ---
 
@@ -77,6 +78,9 @@ latters ingest /path/to/archive --repair --rescue-latin -o ./converted
 | `fields.py` | Field extraction with a found / **blank** / absent distinction |
 | `classify.py` | Label bootstrapping + char-ngram Naive Bayes + honest cross-validation |
 | `template.py` | Per-cell skeleton mining — the reason a 1B model is viable |
+| `retrieve.py` | BM25 + inverted-index TF-IDF + optional dense, fused with RRF |
+| `evaluate.py` | Retrieval evaluation with standard errors and a random baseline |
+| `encoders.py` | Optional dense encoders (not on the default path — see below) |
 | `cli.py` | `inventory`, `ingest`, `fonts convert/gold/tables` |
 
 ### The three things that make this non-trivial
@@ -327,4 +331,72 @@ second, 87% coverage is a 12-second draft instead of a 90-second one.
 
 ```bash
 python -m pytest tests/ -q      # 173 tests
+```
+
+
+---
+
+## Phase 4 — retrieval
+
+```bash
+latters retrieve "अनुशासनिक कार्यवाही हेतु कारण बताओ पत्र" --db corpus.db
+latters eval --db corpus.db
+```
+
+### Only the department filter measurably helps
+
+Same-cell precision@5 on paraphrased queries, 313 queries, **1 SE = 0.028**:
+
+| configuration | cellP@5 | ms |
+|---|---:|---:|
+| random | 0.068 | 0.0 |
+| bm25 | 0.357 | 1.1 |
+| bm25 + dept filter | 0.458 | 1.0 |
+| tfidf | 0.390 | 0.4 |
+| **tfidf + dept filter** | **0.480** | **0.4** |
+| rrf(bm25,tfidf) + dept | 0.489 | 1.9 |
+
+The department filter is worth **+0.09 to +0.10** across every scorer — well
+beyond two standard errors. The scorers are **not distinguishable from each
+other**; bm25, tfidf and rrf all sit inside one another's error bars. Every
+report prints the noise floor so nobody tunes on differences that aren't real.
+
+Default is `tfidf + dept filter`: tied with RRF, 4× faster, one fewer moving
+part.
+
+### The dense encoder was not adopted
+
+The plan assumed a neural encoder was needed. The evidence does not support
+it — and the lexical methods lost only 0.06–0.08 when half the query's words
+were dropped, so they do not collapse under the vocabulary mismatch a
+semantic model is bought to fix.
+
+It also **could not be tested here** (no network access to model weights), so
+this is "not justified by available evidence", not "measured and rejected".
+The plumbing ships with the decision rule fixed in advance:
+
+```bash
+python scripts/phase4_encoder_eval.py --db corpus.db --model ./granite-97m
+```
+
+> Adopt it only if it beats `tfidf + dept filter` on same-cell precision by
+> more than two standard errors, in the degraded condition.
+
+### A trap worth naming
+
+Adding the letter-type filter made same-cell precision read **1.000** — a
+very flattering number that is true by construction, since filtering to the
+cell guarantees every hit is in the cell. The renderer now prints `n/a` with
+the reason instead.
+
+### Both metrics are proxies
+
+Known-item recall (0.90–0.99) is inflated: the query is verbatim text from
+the target. Same-cell precision uses the Phase 3 classifier's labels as
+ground truth, which cross-validated at 0.81 / 0.64 macro-F1 — so its ceiling
+is well under 1.0. The real evaluation, forty clerk-written requests with the
+letters they'd have wanted, still does not exist.
+
+```bash
+python -m pytest tests/ -q      # 205 tests
 ```
