@@ -96,8 +96,14 @@ _ANCHOR_SPECS: list[tuple[str, Role, str, float]] = [
     # --- content landmarks -------------------------------------------------
     ("date", Role.CONTENT, _p(
         rf"दिनांक\s*[:\-ः]?\s*{_D}", rf"दि\s*\.\s*{_D}",
+        # A blank template date is still a date line. 95% of the sample
+        # archive reads `दिनांक------------------`, and requiring a digit
+        # meant none of them counted -- which cost the completeness score and
+        # left the template skeleton unable to order its own date line.
+        r"दिनांक\s*[:\-ः]?\s*[-\u2013\u2014_.]{3,}",
+        r"(?:दिनंाक|दिनाक)\s*[:\-ः]?",
         rf"{_D}{{1,2}}\s+{_MONTHS}\s+{_D}{{2,4}}",
-        rf"(?<![0-9०-९{_SEP}]){_DATE}(?![0-9०-९])",
+        rf"(?<![0-9\u0966-\u096F{_SEP}]){_DATE}(?![0-9\u0966-\u096F])",
         r"\bDated?\s*[:\-]?\s*",
     ), 0.15),
 

@@ -373,3 +373,71 @@ def cross_validate(texts: list[str], labels: list[str], *, k: int = 5,
         macro_f1=sum(f1s) / len(f1s) if f1s else 0.0,
         majority_baseline=max(counts.values()) / len(labels) if labels else 0.0,
         per_class=per_class)
+
+
+# --------------------------------------------------------------------------
+# Applying the classifier to a REQUEST, not a letter
+# --------------------------------------------------------------------------
+@dataclass
+class TrainedClassifier:
+    """Predict department and letter type for a free-text request.
+
+    `bootstrap` reads structure -- branch codes in the letter number, the
+    office line in the letterhead. A clerk's request has neither, so
+    bootstrap returns UNLABELLED for every request and the drafting pipeline
+    loses its department filter and its skeleton. This is what the Phase 3
+    model was trained for; it just has to be wired to the request path.
+
+    The confidence gates come straight from the Phase 3 cross-validation:
+    department reached 0.812 macro-F1 and is applied automatically above its
+    threshold; letter type reached 0.636 and is only ever a *suggestion*,
+    which is why `letter_type_confident` is reported separately.
+    """
+    department: NaiveBayes | None = None
+    letter_type: NaiveBayes | None = None
+    #: Below this softmax margin the prediction is not acted on. Department's
+    #: gate is lower because its measured accuracy is much higher.
+    department_threshold: float = 0.40
+    letter_type_threshold: float = 0.55
+
+    @classmethod
+    def fit(cls, rows: list[tuple[str, str | None, str | None]], *,
+            min_support: int = MIN_SUPPORT, **kw) -> "TrainedClassifier":
+        """`rows` is (text, department, letter_type) from a labelled corpus."""
+        out = cls()
+        for attr, featurise, idx in (("department", department_features, 1),
+                                     ("letter_type", letter_type_features, 2)):
+            X = [featurise(r[0]) for r in rows if r[idx]]
+            y = [r[idx] for r in rows if r[idx]]
+            if len(set(y)) < 2:
+                continue
+            folded, _ = fold_rare(y, min_support=min_support)
+            keep = [i for i, label in enumerate(folded) if label != RARE_LABEL]
+            if len(keep) < 10 or len({folded[i] for i in keep}) < 2:
+                continue
+            setattr(out, attr, NaiveBayes(**kw).fit([X[i] for i in keep],
+                                                    [folded[i] for i in keep]))
+        return out
+
+    def predict(self, request: str) -> tuple[str | None, float, str | None, float]:
+        """Returns (department, confidence, letter_type, confidence)."""
+        dept = ltype = None
+        dconf = lconf = 0.0
+        if self.department is not None:
+            dept, dconf = self.department.predict(department_features(request))
+            if dconf < self.department_threshold:
+                dept = None
+        if self.letter_type is not None:
+            ltype, lconf = self.letter_type.predict(letter_type_features(request))
+            if lconf < self.letter_type_threshold:
+                ltype = None
+        return dept, dconf, ltype, lconf
+
+    @property
+    def letter_type_confident(self) -> bool:
+        """Always False: Phase 3 measured 0.636 macro-F1, below the 0.85 bar.
+
+        Kept as a named property so callers cannot quietly start trusting it
+        without changing this line and the measurement behind it.
+        """
+        return False

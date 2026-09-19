@@ -4,12 +4,13 @@ Fully offline. No cloud API, no telemetry, nothing leaves the machine.
 
 Target hardware and the full phase plan: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
-**Status: Phase 0 measured, Phases 1-4 (conversion, segmentation,
-classification, retrieval) implemented and validated against a real district archive** — see
+**Status: Phase 0 measured, Phases 1-5 (conversion, segmentation,
+classification, retrieval, generation) implemented and validated against a real district archive** — see
 [`docs/PHASE0_FINDINGS.md`](docs/PHASE0_FINDINGS.md) and
 [`docs/PHASE2_FINDINGS.md`](docs/PHASE2_FINDINGS.md) and
 [`docs/PHASE3_FINDINGS.md`](docs/PHASE3_FINDINGS.md) and
-[`docs/PHASE4_FINDINGS.md`](docs/PHASE4_FINDINGS.md).
+[`docs/PHASE4_FINDINGS.md`](docs/PHASE4_FINDINGS.md) and
+[`docs/PHASE5_FINDINGS.md`](docs/PHASE5_FINDINGS.md).
 
 ---
 
@@ -81,6 +82,8 @@ latters ingest /path/to/archive --repair --rescue-latin -o ./converted
 | `retrieve.py` | BM25 + inverted-index TF-IDF + optional dense, fused with RRF |
 | `evaluate.py` | Retrieval evaluation with standard errors and a random baseline |
 | `encoders.py` | Optional dense encoders (not on the default path — see below) |
+| `llm.py` | Ollama client, defaults traced to the Phase 0 measurements |
+| `draft.py` | Prompt budgeting, output sanitising, skeleton assembly |
 | `cli.py` | `inventory`, `ingest`, `fonts convert/gold/tables` |
 
 ### The three things that make this non-trivial
@@ -399,4 +402,75 @@ letters they'd have wanted, still does not exist.
 
 ```bash
 python -m pytest tests/ -q      # 205 tests
+```
+
+
+---
+
+## Phase 5 — drafting
+
+```bash
+latters draft "दाखिल-खारिज में विलंब की जाँच हेतु प्रतिवेदन मांगना है" \
+    --db corpus.db --model gemma3:1b --skeletons skeletons/
+latters draft "..." --db corpus.db --stub     # everything except the LLM
+```
+
+### The model writes the body. Nothing else.
+
+The letterhead belongs to the office, the number is next in a series, the
+date is today, the closing is fixed. Copying those is instant and exactly
+right; generating them spends tokens at ~9 Hindi words/second on something
+that might be wrong. The mined skeleton already supplies **87%** of a
+बैंकिंग/जाँच letter.
+
+### Everything the model writes is untrusted
+
+| removed from the output | replaced with |
+|---|---|
+| `पत्रांक` / `ज्ञापांक` lines | next in series, or a blank slot |
+| `दिनांक` lines | today |
+| duplicate subject, closing block, code fences | the skeleton's own |
+
+**A blank letter number beats an invented one** — 95% of the real archive
+leaves it blank, so a blank is obviously unfinished and a wrong number looks
+finished. Every removal is reported, never applied silently.
+
+Invented numbers are flagged: any numeric token in the draft that appears
+nowhere in the request or the source letters, with Devanagari and Latin
+digits normalised. Over-sensitive on purpose — a false flag costs a glance, a
+missed one costs a letter with an invented case number in it.
+
+The Phase 1 illegal-sequence validator runs on the model's own output too,
+because small models produce malformed Devanagari.
+
+### Skeletons are mined, then fixed by a person
+
+Mining cannot recover line order from a heterogeneous cell — an addressee's
+designation has no anchor and sometimes lands on the wrong side of the
+salutation. That is a five-minute edit, once per category:
+
+```bash
+latters templates --db corpus.db -o skeletons/   # mine
+$EDITOR skeletons/राजस्व_जाँच.md                  # fix
+latters draft "..." --skeletons skeletons/       # the edit wins, and persists
+```
+
+### What is NOT measured
+
+**No generated Hindi has been assessed** — there is no model in this
+repository's environment. The metric that decides the project is editing
+effort: edit distance between the draft and the letter actually dispatched.
+
+```bash
+python scripts/phase5_draft_eval.py --db corpus.db --model gemma3:1b --pairs pairs.tsv
+```
+
+> < 0.15 essentially usable · 0.15–0.40 faster than starting blank ·
+> 0.40–0.70 arguable · **> 0.70 slower than typing it**
+
+Collect 30 pairs of (request, dispatched letter). Nothing else here tells you
+whether the drafts are worth using.
+
+```bash
+python -m pytest tests/ -q      # 241 tests
 ```

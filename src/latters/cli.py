@@ -22,6 +22,8 @@
 
     latters retrieve REQUEST --db X.db   find the letters to draft from
     latters eval --db X.db               measure retrieval against baselines
+
+    latters draft REQUEST --db X.db      draft a letter from the archive
 """
 
 from __future__ import annotations
@@ -590,6 +592,70 @@ comparisons between configurations, never as absolute quality.""")
 
 
 # --------------------------------------------------------------------------
+def cmd_draft(args: argparse.Namespace) -> int:
+    from .draft import Budget, build_service
+    from .llm import Ollama, OllamaError, StubLLM
+    from .store import Store
+
+    llm = StubLLM(reply=args.stub_reply) if args.stub else Ollama(
+        args.model, host=args.host,
+        options={"num_ctx": args.num_ctx, "num_predict": args.num_predict,
+                 "num_thread": args.threads, "temperature": args.temperature})
+    if not args.stub and not llm.available():
+        print(f"Ollama has no model '{args.model}' at {args.host}.\n"
+              f"  ollama pull {args.model}\n"
+              f"Or pass --stub to exercise everything except generation.",
+              file=sys.stderr)
+        return 2
+
+    with Store(args.db) as store:
+        if not store.count():
+            print("corpus is empty; run `latters segment` first", file=sys.stderr)
+            return 1
+        service = build_service(
+            store, llm,
+            budget=Budget(context=args.num_ctx,
+                          reserve_for_output=args.num_predict,
+                          fertility=args.fertility),
+            max_exemplars=args.exemplars, min_trust=args.min_trust,
+            skeleton_overrides=args.skeletons)
+        try:
+            draft = service.draft(args.request, department=args.department,
+                                  letter_type=args.letter_type, subject=args.subject)
+        except OllamaError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
+    print("=" * 72)
+    print(draft.text)
+    print("=" * 72)
+    print(f"\ncategory   {draft.department or '?'} / {draft.letter_type or '?'}")
+    print(f"timing     {draft.seconds:.1f}s   "
+          f"{draft.prompt_tokens} prompt + {draft.output_tokens} output tokens")
+    print(f"quality    {draft.quality_score:.3f} ({draft.quality_verdict})")
+
+    print(f"\ndrafted from {len(draft.sources)} past letter(s):")
+    for lid, why in draft.sources:
+        print(f"  letter {lid}  {why}")
+    if not draft.sources:
+        print("  (none -- this draft is not grounded in the archive)")
+
+    if draft.removed_from_model_output:
+        print(f"\nremoved from the model's output: "
+              f"{', '.join(draft.removed_from_model_output)}")
+    if draft.unsupported_numbers:
+        print(f"\n!! NUMBERS THE MODEL INVENTED: "
+              f"{', '.join(draft.unsupported_numbers)}")
+        print("!! These appear nowhere in your request or in the source letters.")
+        print("!! Check every one before this letter leaves the office.")
+    for w in draft.warnings:
+        print(f"\n!  {w}")
+
+    print("\nThis is a draft. It must be read and corrected before dispatch.")
+    return 1 if draft.needs_review else 0
+
+
+# --------------------------------------------------------------------------
 def cmd_inventory(args: argparse.Namespace) -> int:
     """Phase 1.1: how much of this archive is legacy, and in which fonts?
 
@@ -843,6 +909,34 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--min-cell", type=int, default=5)
     ev.add_argument("--degrade", type=float, default=0.5)
     ev.set_defaults(func=cmd_eval)
+
+    dr = sub.add_parser("draft", help="draft a letter from the archive")
+    dr.add_argument("request")
+    dr.add_argument("--db", required=True)
+    dr.add_argument("--model", default="gemma3:1b")
+    dr.add_argument("--host", default="http://127.0.0.1:11434")
+    dr.add_argument("--department", default=None)
+    dr.add_argument("--letter-type", default=None)
+    dr.add_argument("--subject", default=None)
+    dr.add_argument("--exemplars", type=int, default=3)
+    dr.add_argument("--min-trust", type=float, default=0.6)
+    dr.add_argument("--num-ctx", type=int, default=4096)
+    dr.add_argument("--num-predict", type=int, default=900)
+    dr.add_argument("--threads", type=int, default=4)
+    dr.add_argument("--temperature", type=float, default=0.3)
+    dr.add_argument("--fertility", type=float, default=1.97,
+                    help="tokens per Devanagari word for this model; "
+                         "measured by scripts/phase0_bench.py")
+    dr.add_argument("--skeletons", default=None,
+                    help="directory of human-corrected skeletons, as written "
+                         "by `latters templates -o`; these win over mined ones")
+    dr.add_argument("--stub", action="store_true",
+                    help="skip the LLM; exercises retrieval, skeleton, "
+                         "assembly and the safety checks")
+    dr.add_argument("--stub-reply", default=
+                    "उपर्युक्त विषय के प्रसंग में कहना है कि आवश्यक कार्यवाही "
+                    "सुनिश्चित करते हुए प्रतिवेदन इस कार्यालय को उपलब्ध कराएँ।")
+    dr.set_defaults(func=cmd_draft)
 
     inv = sub.add_parser("inventory", help="Phase 1.1 archive triage")
     inv.add_argument("path"); inv.add_argument("--json", action="store_true")
