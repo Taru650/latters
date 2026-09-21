@@ -3,13 +3,22 @@ name = "latters"
 version = "0.1.0"
 description = "Offline departmental letter drafting assistant"
 requires-python = ">=3.10"
-dependencies = []
+# numpy is the ONE runtime dependency, needed by the retrieval index. It was
+# missing here until an end-to-end install test caught it: the "no corpus
+# database" guard short-circuits before the import, so every quick check
+# passed while `latters retrieve` against a real database would have failed
+# with ModuleNotFoundError on a fresh machine.
+#
+# Everything else is standard library on purpose. Conversion, segmentation,
+# classification, templating and drafting all work with numpy absent, which
+# matters on a locked-down office machine with no wheelhouse.
+dependencies = ["numpy>=1.21"]
 
 [project.optional-dependencies]
-# Kept deliberately empty for Phase 1: conversion + inventory run on the
-# standard library alone, so the ingest CLI works on a locked-down office
-# machine with no wheels available. Later phases add onnxruntime-directml etc.
 dev = ["pytest>=7"]
+# Only for the optional dense-encoder path, which Phase 4 measured as not
+# worth adopting. Install these only to re-run that decision yourself.
+dense = ["onnxruntime>=1.16", "tokenizers>=0.15"]
 
 [project.scripts]
 latters = "latters.cli:main"

@@ -316,3 +316,46 @@ def test_keyboard_interrupt_is_not_a_traceback(monkeypatch, capsys):
     monkeypatch.setattr(cli, "build_parser", lambda: _Parser(_boom))
     assert cli.main([]) == 130
     assert "interrupted" in capsys.readouterr().err
+
+
+def test_every_third_party_import_is_declared():
+    """Regression: numpy was imported by retrieve.py and declared nowhere.
+
+    The "no corpus database" guard short-circuits before that import, so
+    every quick check passed while `latters retrieve` against a real
+    database failed with ModuleNotFoundError on a fresh machine.
+    """
+    import ast
+    import sys as _sys
+
+    root = Path(__file__).resolve().parent.parent
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    declared = set()
+    for block in ("dependencies", "dense", "dev"):
+        m = __import__("re").search(rf"^{block} = \[(.*?)\]", pyproject,
+                                    __import__("re").M | __import__("re").S)
+        if m:
+            for part in m.group(1).split(","):
+                name = part.strip().strip('"\'').split(">")[0].split("=")[0]
+                if name:
+                    declared.add(name.replace("-", "_").lower())
+
+    stdlib = set(getattr(_sys, "stdlib_module_names", ()))
+    local = {p.stem for p in (root / "src" / "latters").rglob("*.py")} | {"latters"}
+    undeclared = set()
+    for path in (root / "src").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                mods = [node.module.split(".")[0]] if node.module and node.level == 0 else []
+            else:
+                continue
+            for mod in mods:
+                key = mod.lower()
+                if key in stdlib or key in local or key in declared:
+                    continue
+                undeclared.add(mod)
+    assert not undeclared, (
+        f"imported but not declared in pyproject.toml: {sorted(undeclared)}")
