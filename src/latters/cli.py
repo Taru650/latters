@@ -806,6 +806,19 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print("the web pages need the optional extras:\n"
               "  pip install -e \".[web]\"", file=sys.stderr)
         return 2
+
+    # Check the paths BEFORE binding the port. Without this a mistyped --db
+    # served an empty corpus and a mistyped --skeletons served letters with no
+    # letterhead -- both of which look like a working application until
+    # somebody reads the output. Every other command already refuses; serve
+    # is the one a non-technical user runs, so it is the one that matters.
+    if _require_db(args.db) is None:
+        return 2
+    if args.skeletons and _require_dir(args.skeletons) is None:
+        print("  (skeletons are optional: drop --skeletons to draft the body "
+              "only)", file=sys.stderr)
+        return 2
+
     from .web.app import create_app
 
     app = create_app(db=args.db, skeletons=args.skeletons, model=args.model,
@@ -818,7 +831,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print("\n!! Bound to a non-loopback address. This application has no\n"
               "!! authentication and the corpus is official correspondence.\n"
               "!! Only do this on a trusted office LAN.", file=sys.stderr)
-    print("\nCtrl-C to stop.")
+    # flush: stdout is block-buffered when it is not a terminal, so
+    # `latters serve > log.txt` showed an empty log until the server
+    # was killed -- the address you need is in that banner.
+    print("\nCtrl-C to stop.", flush=True)
     uvicorn.run(app, host=args.bind, port=args.port, log_level=args.log_level)
     return 0
 

@@ -255,3 +255,24 @@ def test_skeleton_path_traversal_is_impossible(client, name):
     """The name arrives from a URL, so escaping the directory has to be
     impossible rather than merely unlikely."""
     assert client.get(f"/api/skeleton/{name}").status_code in (400, 404)
+
+
+# --- serve refuses a typo -------------------------------------------------
+def test_serve_refuses_a_mistyped_db(tmp_path, capsys):
+    """`serve` binds a port and then looks like it is working. A mistyped
+    --db used to serve an empty corpus: every draft came back with no
+    sources and nothing said why."""
+    (tmp_path / "skeletons").mkdir()
+    assert main(["serve", "--db", str(tmp_path / "nope.db"),
+                 "--skeletons", str(tmp_path / "skeletons"), "--stub"]) == 2
+    assert "no corpus database" in capsys.readouterr().err
+
+
+def test_serve_refuses_a_mistyped_skeletons_directory(tmp_path, capsys):
+    """Silently drafting without a letterhead is worse than not starting:
+    the output looks finished and is missing the office's own header."""
+    (tmp_path / "corpus.db").write_bytes(b"")
+    assert main(["serve", "--db", str(tmp_path / "corpus.db"),
+                 "--skeletons", str(tmp_path / "skelettons"), "--stub"]) == 2
+    err = capsys.readouterr().err
+    assert "no such path" in err and "optional" in err
