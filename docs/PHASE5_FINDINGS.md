@@ -1,5 +1,8 @@
 # Phase 5 findings — generation
 
+
+> **Numbers here are from the build current when this phase was written.** Several have since been re-measured on a clean rebuild; `docs/REBUILD.md` is the current record and says which moved.
+
 The one phase whose central question could not be answered here. There is no
 Ollama and no model in this environment, so **no generated Hindi has been
 assessed**. What follows is what the design does about that.

@@ -1,5 +1,8 @@
 # Phase 3 findings — field extraction, classification, template mining
 
+
+> **Numbers here are from the build current when this phase was written.** Several have since been re-measured on a clean rebuild; `docs/REBUILD.md` is the current record and says which moved.
+
 Measured on the 547-letter corpus built in Phase 2 from a real Saran district
 archive. Every number below is 5-fold cross-validated or a direct count.
 

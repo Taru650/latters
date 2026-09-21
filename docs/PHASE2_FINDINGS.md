@@ -1,5 +1,8 @@
 # Phase 2 findings — measured against a real district archive
 
+
+> **Numbers here are from the build current when this phase was written.** Several have since been re-measured on a clean rebuild; `docs/REBUILD.md` is the current record and says which moved.
+
 Five DOCX files from Saran district, Bihar (~500,000 legacy characters).
 The first real data this project has seen. Everything below is measured.
 

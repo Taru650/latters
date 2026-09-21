@@ -1,5 +1,8 @@
 # Phase 4 findings — retrieval
 
+
+> **Numbers here are from the build current when this phase was written.** Several have since been re-measured on a clean rebuild; `docs/REBUILD.md` is the current record and says which moved.
+
 Measured on the 547-letter corpus, 313 evaluable queries. Phase 3 closed by
 asking whether the metadata filter would do most of the work and whether a
 neural encoder was needed at all. Both questions now have answers.

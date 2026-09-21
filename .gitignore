@@ -7,3 +7,17 @@ dist/
 .venv/
 venv/
 converted/
+
+# The corpus holds real official correspondence -- names, case
+# numbers, complainants. Deleting a committed file does not remove it
+# from git history, so it must never get in.
+*.db
+*.db-wal
+*.db-shm
+archive/
+backups/
+exports/
+review/
+skeletons/
+bundle/
+

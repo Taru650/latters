@@ -303,8 +303,11 @@ letter missing one is a defect, and collapsing them loses both.
 
 | | accuracy | baseline | lift | macro F1 | verdict |
 |---|---:|---:|---:|---:|---|
-| department | 0.936 | 0.662 | +0.274 | **0.812** | apply with a confidence gate |
-| letter type | 0.659 | 0.182 | +0.477 | 0.636 | **suggest only, user confirms** |
+| department | 0.942 | 0.645 | +0.297 | **0.787** | apply with a confidence gate |
+| letter type | 0.662 | 0.218 | +0.444 | 0.672 | **suggest only, user confirms** |
+
+From the clean rebuild; `docs/REBUILD.md` is the current record of every
+measured number and of which ones moved.
 
 Labels are bootstrapped from branch codes (`पत्रांक-----/रा०` → राजस्व) and
 office lines, so 95% of the corpus is labelled with no human effort.
@@ -350,19 +353,20 @@ latters eval --db corpus.db
 
 ### Only the department filter measurably helps
 
-Same-cell precision@5 on paraphrased queries, 313 queries, **1 SE = 0.028**:
+Same-cell precision@5 on paraphrased queries, 315 queries, **1 SE = 0.028**
+(clean rebuild; see `docs/REBUILD.md`):
 
-| configuration | cellP@5 | ms |
-|---|---:|---:|
-| random | 0.068 | 0.0 |
-| bm25 | 0.357 | 1.1 |
-| bm25 + dept filter | 0.458 | 1.0 |
-| tfidf | 0.390 | 0.4 |
-| **tfidf + dept filter** | **0.480** | **0.4** |
-| rrf(bm25,tfidf) + dept | 0.489 | 1.9 |
+| configuration | cellP@5 | R@5 | ms |
+|---|---:|---:|---:|
+| random | 0.062 | 0.006 | 0.0 |
+| bm25 | 0.363 | 0.892 | 1.4 |
+| bm25 + dept filter | 0.463 | 0.933 | 1.4 |
+| tfidf | 0.391 | 0.917 | 0.7 |
+| **tfidf + dept filter** | **0.465** | **0.943** | **0.7** |
+| rrf(bm25,tfidf) + dept | 0.490 | 0.949 | 2.2 |
 
-The department filter is worth **+0.09 to +0.10** across every scorer — well
-beyond two standard errors. The scorers are **not distinguishable from each
+The department filter is worth **+0.07 to +0.10** across every scorer — at
+or beyond two standard errors on each one. The scorers are **not distinguishable from each
 other**; bm25, tfidf and rrf all sit inside one another's error bars. Every
 report prints the noise floor so nobody tunes on differences that aren't real.
 

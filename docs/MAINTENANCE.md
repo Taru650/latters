@@ -57,14 +57,20 @@ is right. Only a `gold/office_*.tsv` produced by a Hindi reader does that.
 
 ## What is actually known, as of the end of Phase 7
 
-Measured on a real Saran district archive (5 files, ~508k legacy characters,
-475 letters):
+Measured on a real Saran district archive (5 files, ~508k legacy characters).
+These are the figures from the clean rebuild on the corrected mapping tables;
+see `docs/REBUILD.md` for the full run and for what changed against the
+per-phase numbers, which were taken on earlier builds and are now stale
+where they differ.
 
-- Corpus: mean trust 0.904; 465 indexed, 10 for review.
-- Retrieval: tfidf + department filter, same-cell P@5 0.500 ± 0.028 degraded.
-- Classification: department macro-F1 0.812 (usable); letter type 0.636
-  (suggest-only, and the code hard-codes `letter_type_confident = False`).
-- Templates: the बैंकिंग/जाँच skeleton supplies 87% of a letter.
+- Corpus: 475 letters found, 455 stored (20 content-identical duplicates);
+  mean trust 0.925; 446 indexed, 9 for review, 0 quarantined.
+- Retrieval: tfidf + department filter, same-cell P@5 **0.465 ± 0.028**
+  degraded, against a 0.062 random baseline. Known-item recall@5 0.943.
+- Classification: department macro-F1 **0.787** (usable, accuracy 0.942 over
+  a 0.645 majority); letter type **0.672** (suggest-only, and the code
+  hard-codes `letter_type_confident = False`).
+- Templates: the बैंकिंग/जाँच skeleton supplies 88% of a letter.
 - DOCX and PDF export verified end to end over HTTP.
 
 **Not known, and material:**
