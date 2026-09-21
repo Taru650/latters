@@ -93,9 +93,20 @@ files into `C:\Windows\Fonts` (drag and drop installs them).
 
 ## Step 5 — point it at the archive
 
+**Do this before Step 6, and note the `cd`.** Every path in Step 6 is
+relative to `C:\latters-data`, not to the repository.
+
 ```powershell
-mkdir C:\latters-data
-# Copy the office's letters into C:\latters-data\archive
+mkdir C:\latters-data\archive
+cd C:\latters-data
+# Now copy the office's .docx letters into C:\latters-data\archive
+explorer C:\latters-data\archive
+```
+
+Check they arrived before going on:
+
+```powershell
+dir archive\*.docx
 ```
 
 `.doc`, `.rtf` and `.pdf` are refused with the reason. Convert the first two
@@ -111,11 +122,16 @@ depends on, which `antiword` and `catdoc` do not:
 
 ## Step 6 — first run, in order
 
-Run these one at a time and read the output. Each is fast (seconds to a
-minute) except the first ingest of a large archive.
+Run these **one at a time** and read the output between them. Pasting the
+whole block into PowerShell runs every line even after one fails, so a
+single missing folder produces eight confusing errors instead of one clear
+one.
+
+Each is fast — seconds to a minute — except the first ingest of a large
+archive.
 
 ```powershell
-cd C:\latters-data
+cd C:\latters-data      # if you are not already there
 
 # 6.1  What is in the archive?
 latters inventory archive

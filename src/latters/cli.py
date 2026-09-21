@@ -55,7 +55,20 @@ def _require_dir(path: str) -> Path | None:
     """
     p = Path(path)
     if not p.exists():
-        print(f"no such path: {p}", file=sys.stderr)
+        # Show where it actually looked. A bare "no such path: archive" makes
+        # the reader work out that a relative path resolved against the
+        # current directory; printing the resolved path makes it obvious.
+        print(f"no such path: {p}\n"
+              f"  looked in: {p.resolve()}\n"
+              f"  current directory: {Path.cwd()}",
+              file=sys.stderr)
+        if not p.is_absolute():
+            siblings = sorted(
+                d.name for d in Path.cwd().iterdir()
+                if d.is_dir() and not d.name.startswith((".", "__")))[:8]
+            if siblings:
+                print(f"  directories here: {', '.join(siblings)}",
+                      file=sys.stderr)
         return None
     return p
 
@@ -71,6 +84,7 @@ def _require_db(path: str) -> str | None:
     p = Path(path)
     if not p.exists():
         print(f"no corpus database at {p}\n"
+              f"  looked in: {p.resolve()}\n"
               f"  Create one with:  latters segment <archive> --db {p}",
               file=sys.stderr)
         return None
