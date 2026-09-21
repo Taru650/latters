@@ -275,3 +275,48 @@ explicit in the code:
 Annexure tables (`पदाधिकारी का नाम, पदनाम एवं कार्यालय का नाम`), body
 continuations, and an interrogatory (`(ख) क्या यह सही है कि ...`). Genuinely
 ambiguous, 2.5% of the corpus, correctly held for human review.
+
+## Unmapped-slot audit (run before the gold review, 5 real files)
+
+Waiting for a Hindi reader is not the only way to find conversion bugs. Every
+legacy character that appears in a legacy-font run and has **no entry in the
+mapping table** is passed through raw, so it can be found mechanically. Over
+the five archive files (~508k legacy characters, 72,921 Devanagari words):
+
+| unmapped character | occurrences | verdict |
+|---|---|---|
+| `-` U+002D | 31,618 | correct — the hyphen is a passthrough, and most are dashed fill-lines |
+| `Î` U+00CE | 1 | **missing slot.** `NqÎh` in "जब सरकारी `NqÎh` रहती है" is छुट्टी, so `Î` → ट्ट |
+| `Ö` U+00D6 | 1 | **missing slot.** `ek¡Ökh, lkj.kA` is माँझी, सारण — the Saran block, so `Ök` → झ and `Ö` → झ् (a second slot for `>`) |
+
+Both slots are inferred from sentence context, not from the font. That is
+weaker evidence than a gold pair and both lines are in the review sheet, but
+छुÎी is wrong under any reading, so shipping the fix cannot make it worse.
+
+### The rule that matters more than the two slots
+
+`छुÎी` scored **clean, 0.965**. Every rule in `validate.py` inspected
+Devanagari only, so a raw Latin key welded into a Hindi word — the single
+least ambiguous signature of a missing mapping slot — was invisible. The new
+`latin_inside_word` rule closes it, and will catch the next missing slot
+without anyone auditing anything.
+
+Its two carve-outs were measured, not guessed. Without them the rule fired 36
+times on this archive; the false positives were all one of two shapes:
+
+- `२० फीट×१० फीट` — U+00D7 and U+00F7 are signs, not letters
+- `११२१२२५५८८६८८/१A` — Devanagari digits legitimately abut a case-number suffix
+
+With both carve-outs: **8 hits in 72,921 words, zero false positives.** Four
+were the two slots above; the other four are one table header, `C.D Ratio`
+followed by eight `a` characters typed in DevLys 040, which converts to eight
+anusvaras. That is junk padding in the source, and flagging it is correct.
+
+### What this does not establish
+
+87.6% of the archive is DevLys 040 or Kruti Dev 041, and both tables still
+inherit Kruti Dev 010 with **zero overrides** — no slot has been proven to
+differ, and none has been proven identical either. This audit finds characters
+we have no mapping for. It cannot find a character we map to the *wrong*
+Devanagari, because the output is well-formed Hindi either way. Only the gold
+set does that.

@@ -122,6 +122,30 @@ _RULES: list[tuple[str, re.Pattern[str], float, str]] = [
         "consonants belong",
     ),
     (
+        "latin_inside_word",
+        # The unambiguous signature of a mapping slot we do not have: the
+        # converter leaves an unknown key untouched, so a Latin letter ends up
+        # welded to Devanagari with no space. Found by auditing a real archive
+        # for legacy characters with no table entry -- `NqÎh` came out as
+        # छुÎी ("छुट्टी") and scored *clean* at 0.965, because every other rule
+        # here only looks at Devanagari. One rule catches every future missing
+        # slot, which is worth more than the two slots it found.
+        #
+        # Two carve-outs, both measured against the archive rather than
+        # guessed: U+00D7/U+00F7 are the multiplication and division signs,
+        # not letters ("२० फीट×१० फीट" is a measurement), and Devanagari
+        # DIGITS abut Latin legitimately in case numbers (११२१२२५५८८६८८/१A).
+        # With both, the rule fired 8 times in 72,921 words of a real
+        # archive and every hit was genuine corruption.
+        re.compile(r"(?:[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f]"
+                   r"(?=[\u0900-\u0965\u0970-\u097f\ua8e0-\ua8ff])"
+                   r"|[\u0900-\u0965\u0970-\u097f\ua8e0-\ua8ff]"
+                   r"(?=[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f]))"),
+        3.0,
+        "a Latin letter welded to Devanagari with no space -- nearly always a "
+        "legacy key with no entry in the mapping table, passed through raw",
+    ),
+    (
         "pua_leak",
         re.compile(r"[-]"),
         5.0,

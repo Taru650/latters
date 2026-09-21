@@ -453,3 +453,38 @@ def test_docx_writer_roundtrips_fonts(tmp_path):
 def test_docx_writer_escapes_xml(tmp_path):
     path = _D.write(tmp_path / "e.docx", [_D.para(_D.run('a<b>&"c"', "Calibri"))])
     assert 'a<b>&"c"' in read_document(path).blocks[0].raw_text
+
+
+# --- slots recovered by auditing a real archive for unmapped keys ---------
+def test_the_tta_slot_from_a_real_holiday_sentence():
+    """`Î` had no table entry, so `NqÎh` passed through as छुÎी -- and the
+    validator scored that *clean*, because every other rule only inspects
+    Devanagari. Context fixes the reading: "जब सरकारी ... रहती है"."""
+    assert Converter("krutidev041").convert("NqÎh").text == "छुट्टी"
+
+
+def test_the_jha_variant_slot_from_a_saran_place_name():
+    """`Ö` is a second slot for `>` (झ्), so `Ök` is the full consonant --
+    the same <half-form>+k pattern as Ùk and the other fourteen."""
+    assert Converter().convert("ek\u00a1\u00d6kh").text == "माँझी"
+    assert Converter().convert("\u00d6").text == "झ्"
+
+
+def test_a_latin_letter_welded_to_devanagari_is_not_clean():
+    """The gap that let छुÎी through: every other rule inspects Devanagari
+    only, so a raw legacy key passed through unconverted scored 0.965."""
+    from latters.validate import assess
+    assert assess("सरकारी छुÎी रहती है").violations.get("latin_inside_word") == 2
+
+
+@pytest.mark.parametrize("text", [
+    "वाद सं०-२६२६R२५/२०२१-२२",   # Devanagari digits abut a case-number suffix
+    "२० फीट×१० फीट माप का",       # U+00D7 is a sign, not a letter
+    "पत्रांक / F.No. DEO/SRN/2024",
+])
+def test_legitimate_mixed_script_is_not_flagged(text):
+    """Measured, not assumed: these three shapes are what the rule hit on a
+    real archive before the carve-outs. Precision matters more than recall
+    here -- a rule that cries wolf on every case number gets ignored."""
+    from latters.validate import assess
+    assert "latin_inside_word" not in assess(text).violations
