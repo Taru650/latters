@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: THE TOKENIZER IS LOAD-BEARING AND THE DEFAULT IS WRONG FOR DEVANAGARI.
 #:
@@ -87,6 +87,33 @@ CREATE VIRTUAL TABLE IF NOT EXISTS letters_fts USING fts5(
     content='letters', content_rowid='id',
     tokenize="unicode61 remove_diacritics 0 categories 'L* N* Mn Mc Co'"
 );
+
+-- Phase 7. Every draft that leaves through the export button is half of a
+-- (request, dispatched letter) pair, and the exported text is the other half.
+-- Recording both is what turns editing effort -- the metric the plan says
+-- decides success -- into a number that accrues by itself, instead of one
+-- that waits on a 30-pair study nobody ever runs. See effort.py.
+--
+-- dispatched_text and effort stay NULL until an export happens: a draft that
+-- was generated and abandoned is a real outcome and deleting the row would
+-- hide it.
+CREATE TABLE IF NOT EXISTS drafts (
+    id               INTEGER PRIMARY KEY,
+    created_at       TEXT    NOT NULL,
+    request          TEXT    NOT NULL,
+    department       TEXT,
+    letter_type      TEXT,
+    draft_text       TEXT    NOT NULL,
+    dispatched_text  TEXT,
+    dispatched_at    TEXT,
+    export_format    TEXT,
+    effort           REAL,
+    seconds          REAL,
+    model            TEXT,
+    needs_review     INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS ix_drafts_effort ON drafts(effort);
 
 CREATE TRIGGER IF NOT EXISTS letters_ai AFTER INSERT ON letters BEGIN
     INSERT INTO letters_fts(rowid, text, subject)
@@ -244,6 +271,73 @@ class Store:
         return self.db.execute(
             "SELECT * FROM letters WHERE verdict != 'index' "
             "ORDER BY trust ASC LIMIT ?", (limit,)).fetchall()
+
+    # --- drafts (Phase 7) -------------------------------------------------
+    def record_draft(self, *, request: str, draft_text: str,
+                     department: str | None = None,
+                     letter_type: str | None = None,
+                     seconds: float | None = None, model: str | None = None,
+                     needs_review: bool | None = None) -> int:
+        """Log a generated draft and return its id.
+
+        Called for every generation, including ones nobody exports. A draft
+        that was produced and abandoned is a real outcome -- probably the
+        worst one -- and a table that only held exported drafts would report
+        the tool as flawless while people quietly stopped using it.
+        """
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._write_lock:
+            cur = self.db.execute(
+                """INSERT INTO drafts
+                   (created_at, request, department, letter_type, draft_text,
+                    seconds, model, needs_review)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (now, request, department, letter_type, draft_text, seconds,
+                 model, None if needs_review is None else int(needs_review)))
+            self.db.commit()
+        return int(cur.lastrowid)
+
+    def record_dispatch(self, draft_id: int, dispatched_text: str,
+                        export_format: str) -> float | None:
+        """Attach the exported text to its draft and score the edit.
+
+        Returns the effort score, or None if the id is unknown -- which is
+        not an error worth failing an export over: the letter is already
+        written and refusing to hand it over to protect a statistic would be
+        the wrong trade.
+        """
+        from .effort import measure
+
+        row = self.db.execute(
+            "SELECT draft_text FROM drafts WHERE id = ?", (draft_id,)).fetchone()
+        if row is None:
+            return None
+        score = measure(row["draft_text"], dispatched_text).score
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._write_lock:
+            self.db.execute(
+                """UPDATE drafts SET dispatched_text = ?, dispatched_at = ?,
+                   export_format = ?, effort = ? WHERE id = ?""",
+                (dispatched_text, now, export_format, score, draft_id))
+            self.db.commit()
+        return score
+
+    def effort_scores(self) -> list[float]:
+        return [r[0] for r in self.db.execute(
+            "SELECT effort FROM drafts WHERE effort IS NOT NULL")]
+
+    def draft_stats(self) -> dict:
+        """Counts that say how the tool is actually being used.
+
+        `generated` minus `dispatched` is the abandonment count, and it is
+        the honest companion to the effort median: a low median over three
+        exports out of ninety drafts is not a success.
+        """
+        n = self.db.execute("SELECT COUNT(*) FROM drafts").fetchone()[0]
+        d = self.db.execute(
+            "SELECT COUNT(*) FROM drafts WHERE dispatched_text IS NOT NULL"
+        ).fetchone()[0]
+        return {"generated": n, "dispatched": d, "abandoned": n - d}
 
     def stats(self) -> dict:
         row = self.db.execute(

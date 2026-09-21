@@ -1,0 +1,3 @@
+# cmd.exe mis-parses goto labels and parenthesised blocks in LF-only
+# files, and these are never edited on Linux.
+*.bat text eol=crlf

@@ -35,6 +35,8 @@ function initDraft() {
   const go = $("#go");
   if (!go) return;
 
+  let currentDraftId = null;
+
   go.addEventListener("click", async () => {
     const request = $("#request").value.trim();
     if (request.length < 10) {
@@ -56,6 +58,10 @@ function initDraft() {
           letter_number: $("#letter_number").value,
         }),
       });
+      // Phase 7: carried back on export so the server can measure how much
+      // of the draft survived. Cleared on the next generation so an export
+      // is never credited to the wrong draft.
+      currentDraftId = d.draft_id ?? null;
       renderDraft(d);
       $("#status").textContent = d.queued
         ? "(एक और प्रारूप चल रहा था, इसलिए प्रतीक्षा करनी पड़ी)" : "";
@@ -74,7 +80,10 @@ function initDraft() {
         const res = await fetch("/api/export/" + fmt, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: $("#letter").value }),
+          body: JSON.stringify({
+            text: $("#letter").value,
+            draft_id: currentDraftId,
+          }),
         });
         if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
         const blob = await res.blob();

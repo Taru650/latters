@@ -22,6 +22,7 @@ pytest.importorskip("httpx2", reason="starlette.testclient needs httpx2")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from latters.cli import main  # noqa: E402
+from latters.store import Store  # noqa: E402
 from latters.web.app import create_app  # noqa: E402
 from make_fixture import build  # noqa: E402
 
@@ -61,6 +62,7 @@ def client(tmp_path_factory):
                      exports=work / "exports")
     with TestClient(app) as c:
         c.workdir = work
+        c.db = db
         yield c
 
 
@@ -309,3 +311,36 @@ def test_serve_refuses_a_mistyped_skeletons_directory(tmp_path, capsys):
                  "--skeletons", str(tmp_path / "skelettons"), "--stub"]) == 2
     err = capsys.readouterr().err
     assert "no such path" in err and "optional" in err
+
+
+# --- editing effort accrues from real use (Phase 7) -----------------------
+def test_a_draft_and_its_export_become_an_effort_score(client):
+    """The whole point of Phase 7: the metric that decides success has to
+    fill itself from ordinary work, not from a 30-pair study nobody runs."""
+    d = client.post("/api/draft",
+                    json={"request": "जाँच प्रतिवेदन मांगना है"}).json()
+    assert isinstance(d["draft_id"], int)
+
+    edited = d["text"].replace("प्रतिवेदन", "प्रतिवेदन शीघ्र", 1)
+    assert client.post("/api/export/txt",
+                       json={"text": edited, "draft_id": d["draft_id"]}
+                       ).status_code == 200
+
+    scores = Store(client.db).effort_scores()
+    assert len(scores) == 1 and 0 < scores[0] < 0.5
+
+
+def test_an_export_with_no_draft_id_still_works(client):
+    """Someone pasting their own text into the box is a legitimate use and
+    must not be blocked by the measurement."""
+    assert client.post("/api/export/txt",
+                       json={"text": "विषय: परीक्षण।"}).status_code == 200
+
+
+def test_an_abandoned_draft_is_still_counted(client):
+    """A draft generated and never exported is a real outcome -- probably
+    the worst one -- and must not vanish from the statistics."""
+    before = Store(client.db).draft_stats()["generated"]
+    client.post("/api/draft", json={"request": "एक और पत्र चाहिए यहाँ"})
+    after = Store(client.db).draft_stats()
+    assert after["generated"] == before + 1 and after["abandoned"] >= 1

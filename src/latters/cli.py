@@ -22,6 +22,8 @@
 
     latters retrieve REQUEST --db X.db   find the letters to draft from
     latters eval --db X.db               measure retrieval against baselines
+    latters scorecard --db X.db          all three scorecards (Phase 7)
+    latters backup --db X.db             consistent snapshot of the corpus
 
     latters draft REQUEST --db X.db      draft a letter from the archive
     latters serve --db X.db              the drafting and admin web pages
@@ -799,6 +801,79 @@ def cmd_draft(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+def cmd_scorecard(args: argparse.Namespace) -> int:
+    """Phase 7: all three scorecards, loudly including the empty ones."""
+    if _require_db(args.db) is None:
+        return 2
+
+    from .scorecard import build, render
+
+    gold_dir = Path(args.gold) if args.gold else None
+    if gold_dir is not None and _require_dir(args.gold) is None:
+        return 2
+    cards = build(args.db, gold_dir)
+    print(render(cards))
+    # Exit 1 when anything is unmeasured or failing. `latters scorecard`
+    # belongs in whatever the office uses to decide the thing is ready, and
+    # a command that returns 0 while two of three cards are empty would let
+    # it pass.
+    failing = [c for c in cards
+               if not c.ok or (c.verdict or "").startswith(("NOT", "FAIL"))]
+    return 1 if failing else 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    """Phase 7: copy the corpus safely while the server may be writing.
+
+    `copy corpus.db backup\` is what an office will do, and on a WAL
+    database that is how you get a backup missing the last N transactions
+    with no error anywhere. sqlite3's own backup API takes a consistent
+    snapshot of a live database, so this is a one-liner that is correct
+    rather than a one-liner that looks correct.
+    """
+    import sqlite3
+    from datetime import datetime
+
+    if _require_db(args.db) is None:
+        return 2
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    dest = out_dir / f"corpus-{stamp}.db"
+
+    src = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    try:
+        with sqlite3.connect(dest) as dst:
+            src.backup(dst)
+    finally:
+        src.close()
+
+    # Verify rather than assume. A backup nobody has opened is a hope.
+    with sqlite3.connect(f"file:{dest}?mode=ro", uri=True) as check:
+        integrity = check.execute("PRAGMA integrity_check").fetchone()[0]
+        letters = check.execute("SELECT COUNT(*) FROM letters").fetchone()[0]
+    if integrity != "ok":
+        print(f"backup FAILED integrity check: {integrity}", file=sys.stderr)
+        return 1
+
+    size_mb = dest.stat().st_size / 1e6
+    print(f"{dest}  {letters} letters  {size_mb:.1f} MB  integrity ok")
+
+    if args.keep:
+        old_backups = sorted(out_dir.glob("corpus-*.db"))[:-args.keep]
+        for f in old_backups:
+            f.unlink()
+        if old_backups:
+            print(f"removed {len(old_backups)} older backup(s), keeping "
+                  f"{args.keep}")
+
+    print("\nTo restore: stop the server, then copy this file over "
+          "corpus.db.\nThe skeletons/ folder is the only other state; "
+          "back that up too.")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     try:
         import uvicorn
@@ -1145,6 +1220,19 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--stub", action="store_true",
                     help="serve without an LLM; everything else works")
     sv.set_defaults(func=cmd_serve)
+
+    sc = sub.add_parser("scorecard", help="Phase 7: all three scorecards")
+    sc.add_argument("--db", required=True)
+    sc.add_argument("--gold", default=None,
+                    help="directory of gold .tsv files (default: discovered)")
+    sc.set_defaults(func=cmd_scorecard)
+
+    bk = sub.add_parser("backup", help="consistent snapshot of the corpus")
+    bk.add_argument("--db", required=True)
+    bk.add_argument("-o", "--out", default="backups")
+    bk.add_argument("--keep", type=int, default=0,
+                    help="delete all but the newest N backups (0 = keep all)")
+    bk.set_defaults(func=cmd_backup)
 
     inv = sub.add_parser("inventory", help="Phase 1.1 archive triage")
     inv.add_argument("path"); inv.add_argument("--json", action="store_true")

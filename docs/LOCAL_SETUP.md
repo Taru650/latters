@@ -11,6 +11,22 @@ pip install -e ".[dev,web]"
 latters serve --db corpus.db --skeletons skeletons --model gemma3:1b
 ```
 
+### Step 9 — check what has and has not been measured
+
+```powershell
+latters scorecard --db corpus.db
+latters backup --db corpus.db -o backups --keep 14
+```
+
+`scorecard` exits non-zero while any of the three cards has no data, so it
+can gate a release instead of decorating one. Expect it to exit 1 today:
+the gold set does not exist and nobody has dispatched a draft yet.
+
+`backup` is not a file copy -- the database runs in WAL mode and copying it
+while the server writes silently loses the newest transactions. Copy the
+`backups\` folder to a second drive afterwards; a backup on the same
+spinning disk protects against a mistake, not against the disk.
+
 Then open <http://127.0.0.1:8765/>. It binds to loopback only — **there is no
 authentication and the corpus is official correspondence**, so do not put it
 on a network without thinking about that first.
@@ -318,6 +334,7 @@ whether the GPU deficit was PCIe transfer or real.
 | boxes instead of Hindi | console font — see Step 2 |
 | everything slow, disk at 100% | the spinning disk; see Step 0 |
 | `the web pages need the optional extras` | `pip install -e ".[web]"` |
+| `scorecard` exits 1 | correct: something is unmeasured or failing. Read which card says NO DATA |
 | PDF export fails, DOCX works | LibreOffice; export DOCX and print from Word |
 | `source file could not be loaded` from LibreOffice | the Writer module is missing, not your letter — it fails on a plain `.txt` too. Install the full LibreOffice, not `-core` |
 | PDF shows boxes where the Hindi should be | the PDF says Nirmala UI and that font is not installed. It ships with Windows 8 and later; on Linux install `fonts-lohit-deva` or another Devanagari font |

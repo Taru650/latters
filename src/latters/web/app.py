@@ -214,7 +214,17 @@ def create_app(db: str | Path = "corpus.db",
             except OllamaError as exc:
                 raise HTTPException(503, str(exc))
 
+        # Phase 7: log every generation, exported or not. See store.py --
+        # a table that only held exported drafts would report the tool as
+        # flawless while people quietly stopped using it.
+        draft_id = await asyncio.to_thread(
+            ws.store.record_draft, request=request_text, draft_text=d.text,
+            department=d.department, letter_type=d.letter_type,
+            seconds=d.seconds, model=app.state.model,
+            needs_review=d.needs_review)
+
         return JSONResponse({
+            "draft_id": draft_id,
             "text": d.text, "body": d.body,
             "department": d.department, "letter_type": d.letter_type,
             "subject": d.subject,
@@ -247,6 +257,13 @@ def create_app(db: str | Path = "corpus.db",
         text = (payload.get("text") or "").strip()
         if not text:
             raise HTTPException(422, "nothing to export")
+        # The other half of the pair. An unknown or absent draft_id is not
+        # an error: the letter is written, and refusing to hand it over to
+        # protect a statistic would be the wrong trade.
+        draft_id = payload.get("draft_id")
+        if isinstance(draft_id, int):
+            await asyncio.to_thread(ws.store.record_dispatch, draft_id, text, fmt)
+
         name = f"letter-{date.today():%Y%m%d}-{uuid.uuid4().hex[:8]}"
         path = await asyncio.to_thread(
             _write_export, text, fmt, export_dir / name, ws.template_docx)
