@@ -20,6 +20,11 @@ against known ground truth:
     -l hin+eng    char accuracy 0.9781   letter number DESTROYED
     -l eng+hin    char accuracy 0.9805   letter number recovered exactly
 
+Read those to two decimals, not four. Re-running the same page 27 times in
+the degradation study gave 0.962-0.976 with nothing changed that should
+have mattered, so the real figure is "about 96-98% of characters" and the
+gap between the three rows is the finding, not the third decimal.
+
 With `hin` alone, `F.No. DEO/SRN/2024/1187` came out as
 `8४0. 0£50/579/2024/787` -- Latin letters and ASCII digits pushed into
 Devanagari. That is not a cosmetic loss. **The letter number carries the
@@ -34,7 +39,11 @@ through untouched.
 
 **4. Tesseract's own confidence is worth having.** Mean per-word confidence
 was 92-94 on real letters and **11.3 on pure noise**, so it separates a
-usable scan from a failed one. Without it an OCR'd letter scores like a
+usable scan from a failed one. The degradation study confirmed the property
+that actually matters: confidence falls *at the same step* accuracy does.
+Noise is a cliff, not a slope -- sigma 30 reads at 0.97 and sigma 50 reads
+nothing at all -- and at that cliff confidence went to 0.0 too. See
+`docs/OCR_DEGRADATION.md`. Without it an OCR'd letter scores like a
 clean DOCX: the validator only catches *illegal* Devanagari, and a
 misrecognised letter is usually perfectly legal Devanagari that happens to
 be the wrong word. See `ocr_confidence`.
@@ -73,7 +82,16 @@ MIN_TEXT_LAYER_CHARS = 120
 #: into the trust score.
 LOW_WORD_CONF = 60.0
 
-OCR_TIMEOUT = 300
+#: Per PAGE, not per batch. Found by degrading a test page: Tesseract took
+#: **over 300 seconds on one noisy image** and would have kept going. A page
+#: that cannot be read in a minute on this hardware is not going to become
+#: readable, and a batch of forty scans must not hold a web worker for
+#: hours. A page that trips this is reported, not silently dropped.
+OCR_PAGE_TIMEOUT = 60
+
+#: pdftotext and pdftoppm are I/O bound and predictable; they get their own,
+#: looser budget.
+OCR_TIMEOUT = 180
 
 
 @dataclass
@@ -154,8 +172,16 @@ def ocr_image(path: Path, *, langs: str = OCR_LANGS) -> tuple[str, float, float]
     with tempfile.TemporaryDirectory(prefix="latters-ocr-") as tmp:
         stem = Path(tmp) / "page"
         base = [exe, str(path), str(stem), "-l", langs, "--psm", "6"]
-        subprocess.run(base, capture_output=True, timeout=OCR_TIMEOUT)
-        subprocess.run(base + ["tsv"], capture_output=True, timeout=OCR_TIMEOUT)
+        try:
+            subprocess.run(base, capture_output=True,
+                           timeout=OCR_PAGE_TIMEOUT)
+            subprocess.run(base + ["tsv"], capture_output=True,
+                           timeout=OCR_PAGE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # Not an error to propagate: one unreadable page in a batch of
+            # forty must not lose the other thirty-nine. Zero confidence is
+            # the right answer and the caller reports it.
+            return "", 0.0, 1.0
 
         txt = stem.with_suffix(".txt")
         text = txt.read_text(encoding="utf-8", errors="replace") if txt.exists() else ""
@@ -194,6 +220,9 @@ def _ocr_pdf(path: Path, *, langs: str) -> tuple[str, int, list[float], list[flo
             pages.append(text)
             means.append(mean)
             lows.append(low)
+            # A page that timed out contributes 0.0, which drags the
+            # document's mean down -- correctly. Half a letter read is not
+            # a letter read.
     return "\n".join(pages), len(pages), means, lows
 
 
@@ -240,7 +269,12 @@ def read_image(path: Path, *, langs: str = OCR_LANGS) -> tuple[Document, OcrRepo
             f"300 dpi instead.")
     report = OcrReport(tier="ocr", pages=1, ocr_pages=1,
                        mean_word_confidence=mean, low_confidence_share=low)
-    if mean < LOW_WORD_CONF:
+    if not text.strip() or mean == 0.0:
+        report.warnings.append(
+            f"{path.name}: Tesseract gave up on this page (nothing read, or "
+            f"over {OCR_PAGE_TIMEOUT}s). Heavy speckle is the usual cause; "
+            f"scan again in greyscale rather than colour.")
+    elif mean < LOW_WORD_CONF:
         report.warnings.append(
             f"{path.name}: mean OCR confidence {mean:.0f} of 100. A clean "
             f"300 dpi scan measures 92-94 and pure noise measures 11, so this "

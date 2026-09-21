@@ -171,9 +171,24 @@ conversion score, which combined with `SOURCE_TIERS["ocr"] = 0.4` puts a
 clean scan around trust 0.80 — **`review`, not `index`.** That is the point:
 a transcription should wait for a human.
 
-The accuracy figures come from a *rendered* PDF, which is the best case. A
-real scan — skewed, 200 dpi, a fax — will be worse, and nothing here has
-been tested on one.
+`docs/OCR_DEGRADATION.md` tested the rest of the envelope. The short
+version: **only noise matters, and it is a cliff.** Accuracy is flat at
+0.96–0.98 from 100 dpi to 600 dpi, 0° to 5° skew, JPEG quality 15, blur
+radius 3 and contrast crushed to a fifth — then Gaussian noise σ=50 takes it
+to **0.0000** in one step. The advice for the office is one line: **scan in
+greyscale, not colour.** Colour-scanning a grey document is where speckle
+comes from.
+
+Confidence collapses in the same step accuracy does, which is the property
+the whole design leans on.
+
+Read the accuracy to two decimals. Re-running one page 27 times gave
+0.962–0.976 with nothing changed that should have mattered.
+
+Every input in that study is still a *synthetic* degradation of a clean
+digital render — no paper texture, ink bleed, show-through or photocopier
+artefacts. **One real scanned letter would be worth more than the whole
+table.**
 
 ## Adding a font mapping
 

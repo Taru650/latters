@@ -47,7 +47,11 @@ from .gold import discover, run as run_gold
 from .repair import repair as repair_text
 from .validate import assess, build_vocabulary
 
-ARCHIVE_SUFFIXES = (".docx", ".doc", ".dot", ".rtf", ".pdf")
+#: Scans and photographs are here too, so `latters segment archive` sees
+#: exactly what the admin upload box accepts. They diverged once and a
+#: folder of scans silently produced an empty corpus from the CLI.
+ARCHIVE_SUFFIXES = (".docx", ".doc", ".dot", ".rtf", ".pdf",
+                    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
 
 
 def _require_dir(path: str) -> Path | None:
@@ -287,17 +291,36 @@ def cmd_gold_coverage(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
-def _convert_all(root: Path, args) -> list[tuple[Path, str]]:
+def _convert_all(root: Path, args) -> list[tuple[Path, str, str, float]]:
+    """Read everything readable. Returns (path, text, tier, confidence).
+
+    The tier and confidence travel PER FILE, not per run. `--tier` used to
+    label every letter in a batch identically, so a scanned PDF dropped into
+    an archive of .docx was stored with docx trust -- the same bug the web
+    upload path had, left behind in the CLI when OCR was added there first.
+    """
+    from .ocr import IMAGE_SUFFIXES
+
     out = []
     for path in _iter_files(root):
+        suffix = path.suffix.lower()
+        report = None
         try:
-            doc = read_document(path)
+            if suffix == ".pdf" or suffix in IMAGE_SUFFIXES:
+                from .ocr import read_image, read_pdf
+                doc, report = (read_pdf(path) if suffix == ".pdf"
+                               else read_image(path))
+            else:
+                doc = read_document(path)
         except Exception:
             continue
         text, _ = convert_document(doc, latin_digits=getattr(args, "latin_digits", False),
                                    rescue_latin=True)
         text, _ = repair_text(text)
-        out.append((path, text))
+        # An explicit --tier still wins for the formats that have no reader
+        # of their own; OCR knows better than the flag about its own output.
+        tier = report.tier if report is not None else getattr(args, "tier", "docx")
+        out.append((path, text, tier, 1.0 if report is None else report.confidence))
     return out
 
 
@@ -313,17 +336,22 @@ def cmd_segment(args: argparse.Namespace) -> int:
     if not converted:
         print("nothing readable in that path", file=sys.stderr)
         return 1
-    vocab = build_vocabulary([t for _, t in converted], min_count=args.vocab_min)
+    vocab = build_vocabulary([t for _, t, _, _ in converted],
+                             min_count=args.vocab_min)
 
     rows: list[LetterRow] = []
-    per_file: list[tuple[str, int]] = []
-    for path, text in converted:
+    per_file: list[tuple[str, int, str]] = []
+    for path, text, tier, penalty in converted:
         segments = split(text)
-        per_file.append((path.name, len(segments)))
+        per_file.append((path.name, len(segments), tier))
         for i, seg in enumerate(segments, 1):
             q = assess(seg.text, vocabulary=vocab or None)
             comp = seg.completeness()
-            score = trust(q.score, comp, args.tier)
+            # Tesseract's own confidence multiplies the conversion score:
+            # the validator only catches ILLEGAL Devanagari, and a
+            # misrecognised word is usually legal Devanagari that is wrong.
+            conv = q.score * penalty
+            score = trust(conv, comp, tier)
             # The subject has to be stored here. It feeds the FTS subject
             # column and the retrieval evaluation's query set, and leaving it
             # NULL made both silently inert in a fresh pipeline.
@@ -331,15 +359,16 @@ def cmd_segment(args: argparse.Namespace) -> int:
             rows.append(LetterRow(
                 source_file=path.name, seq=i, text=seg.text,
                 start_line=seg.start_line, end_line=seg.end_line,
-                source_tier=args.tier, conversion_confidence=q.score,
+                source_tier=tier, conversion_confidence=conv,
                 completeness=comp, trust=score, verdict=verdict(score),
                 opened_by=seg.opened_by, form=seg.form.value,
                 anchors=seg.anchors,
                 violations=q.violations, missing=seg.missing(),
                 subject=subject.value if subject else None))
 
-    for name, n in per_file:
-        print(f"  {name[:44]:46} {n:4d} letters")
+    for name, n, tier in per_file:
+        how = "" if tier == getattr(args, "tier", "docx") else f"  [{tier}]"
+        print(f"  {name[:40]:42} {n:4d} letters{how}")
     buckets = Counter(r.verdict for r in rows)
     print(f"\n{len(rows)} letters from {len(converted)} file(s); "
           f"vocabulary {len(vocab)} words")
@@ -376,7 +405,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
     lengths: list[int] = []
     completeness: list[float] = []
     longest = None
-    for _, text in converted:
+    for _, text, _, _ in converted:
         for line in tag_lines(text):
             fired.update(line.anchors)
         for seg in split(text):
@@ -497,7 +526,7 @@ def cmd_fields(args: argparse.Namespace) -> int:
     if args.db:
         texts = [r[1] for r in _labelled_rows(args.db)]
     else:
-        texts = [t for _, t in _convert_all(Path(args.path), args)]
+        texts = [t for _, t, _, _ in _convert_all(Path(args.path), args)]
     if not texts:
         print("nothing to read", file=sys.stderr)
         return 1

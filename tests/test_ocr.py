@@ -220,3 +220,39 @@ def test_availability_is_reportable_without_the_tools_installed():
     tools = available()
     assert set(tools) == {"pdftotext", "pdftoppm", "tesseract"}
     assert all(isinstance(v, bool) for v in tools.values())
+
+
+# --- the page that never finishes -----------------------------------------
+def test_a_page_that_times_out_returns_zero_not_an_exception(monkeypatch, tmp_path):
+    """Found by the degradation study: Tesseract ran over 300 SECONDS on a
+    heavily speckled page and would have kept going. On a batch of forty
+    scans that is hours of a blocked web worker on a 15 W CPU.
+
+    One unreadable page must not lose the other thirty-nine, so the timeout
+    returns zero confidence rather than raising."""
+    import subprocess as sp
+    from latters import ocr
+
+    def boom(*a, **kw):
+        raise sp.TimeoutExpired(cmd="tesseract", timeout=ocr.OCR_PAGE_TIMEOUT)
+
+    monkeypatch.setattr(ocr.shutil, "which", lambda n: "/usr/bin/" + n)
+    monkeypatch.setattr(ocr.subprocess, "run", boom)
+    text, mean, low = ocr.ocr_image(tmp_path / "whatever.png")
+    assert text == "" and mean == 0.0 and low == 1.0
+
+
+def test_the_per_page_timeout_is_short_enough_to_matter():
+    """300s per page was the default that caused the hang. A page that
+    cannot be read in a minute is not going to become readable."""
+    from latters.ocr import OCR_PAGE_TIMEOUT
+    assert OCR_PAGE_TIMEOUT <= 120
+
+
+def test_a_timed_out_scan_is_reported_rather_than_stored_as_a_letter(
+        monkeypatch, tmp_path):
+    from latters import ocr
+
+    monkeypatch.setattr(ocr, "ocr_image", lambda p, **kw: ("   ", 0.0, 1.0))
+    with pytest.raises(UnsupportedFormat):
+        ocr.read_image(tmp_path / "blank.png")
