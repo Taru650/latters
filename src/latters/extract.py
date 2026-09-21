@@ -97,6 +97,10 @@ class Document:
     warnings: list[str] = field(default_factory=list)
 
 
+#: Scans and photographs. Read through ocr.py; see read_document.
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
+
+
 class UnsupportedFormat(Exception):
     """Raised for formats that need an external converter."""
 
@@ -202,13 +206,20 @@ def read_document(path: Path) -> Document:
             f"{path.name}: RTF. Convert with `soffice --headless --convert-to docx` "
             "so the \\fonttbl font assignments survive as run properties."
         )
-    if suffix == ".pdf":
-        raise UnsupportedFormat(
-            f"{path.name}: PDF. Do NOT extract with a position-sorting extractor -- "
-            "it reorders matras and silently corrupts the text (और typed `vkSj` "
-            "extracts as `vkjS` and converts to आरै). Use a logical-stream "
-            "extractor such as `krutiextract`, and mark the result source_tier=pdf."
-        )
+    if suffix == ".pdf" or suffix in _IMAGE_SUFFIXES:
+        # Handled in ocr.py, which also decides the source tier: a PDF with a
+        # text layer is 'pdf', a scan or photograph is 'ocr'. Imported lazily
+        # so the core pipeline does not depend on poppler or Tesseract being
+        # installed -- an archive of .docx needs neither.
+        #
+        # The original warning stands and is repeated by ocr.read_pdf on every
+        # text-layer read: a PDF made from a legacy Hindi font can carry
+        # reordered matras that look right in a viewer (और typed `vkSj` can
+        # extract as `vkjS` and convert to आरै).
+        from .ocr import read_image, read_pdf
+        doc, _report = (read_pdf(path) if suffix == ".pdf"
+                        else read_image(path))
+        return doc
     raise UnsupportedFormat(f"{path.name}: unhandled extension {suffix!r}")
 
 

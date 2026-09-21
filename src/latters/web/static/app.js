@@ -187,7 +187,15 @@ function initAdmin() {
       const r = await res.json();
       const lines = [
         `जोड़े गए: ${r.inserted}   पहले से मौजूद: ${r.duplicates}`,
-        ...r.files.map((f) => `  ${f.file}: ${f.letters} पत्र`),
+        // Say HOW each file was read. A letter transcribed by OCR and one
+        // read from a .docx are not the same kind of evidence, and the only
+        // place a user can learn which is here.
+        ...r.files.map((f) => {
+          const how = f.source === "ocr" ? "  [स्कैन/OCR]"
+                    : f.source === "pdf" ? "  [PDF text]" : "";
+          return `  ${f.file}: ${f.letters} पत्र${how}`;
+        }),
+        ...(r.notes || []).map((n) => `  ! ${n}`),
         ...r.skipped.map((s) => `  छोड़ा गया ${s.file}: ${s.reason}`),
       ];
       $("#uploadlog").textContent = lines.join("\n");

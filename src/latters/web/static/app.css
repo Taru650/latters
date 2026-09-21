@@ -65,3 +65,15 @@ tbody tr:hover { background: #fafcfe; }
 .stat b { display: block; font-size: 1.35rem; }
 .stat span { color: var(--muted); font-size: .84rem; }
 footer { max-width: 1020px; margin: 0 auto; padding: 1rem 1.25rem 2.5rem; color: var(--muted); font-size: .88rem; }
+
+/* Missing OCR tooling, and the standing caveat on transcribed text. The
+   admin page is the only place a user can learn that a scanned letter is a
+   transcription rather than the original. */
+.warn {
+  color: var(--warn);
+  border-left: 3px solid var(--warn);
+  padding: 0.4rem 0.7rem;
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}

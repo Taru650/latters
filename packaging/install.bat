@@ -43,7 +43,7 @@ if errorlevel 1 goto :fail
 
 REM --- 2. the application ----------------------------------------------
 echo.
-echo   [1/4] installing the application from %BUNDLE%wheels
+echo   [1/5] installing the application from %BUNDLE%wheels
 REM  --no-index is the whole point: pip must not try the network. Without
 REM  it, pip reaches for PyPI, hangs on a machine with no route out, and
 REM  eventually fails with a timeout that reads like a broken package.
@@ -56,7 +56,7 @@ if errorlevel 1 (
 
 REM --- 3. Ollama -------------------------------------------------------
 echo.
-echo   [2/4] Ollama
+echo   [2/5] Ollama
 where ollama >nul 2>&1
 if errorlevel 1 (
   if not exist "%BUNDLE%OllamaSetup.exe" (
@@ -75,7 +75,7 @@ if errorlevel 1 (
 
 REM --- 4. the model ----------------------------------------------------
 echo.
-echo   [3/4] the model
+echo   [3/5] the model
 if not exist "%BUNDLE%model\MODEL_NAME" (
   echo   [X] no model in the bundle. The application will still run with
   echo       --stub, but it cannot write letters.
@@ -101,9 +101,49 @@ goto :model_done
 echo       %MODEL% already present
 :model_done
 
+REM --- 4b. OCR (optional, for scans and PDFs) --------------------------
+echo.
+echo   [3b/5] OCR tools
+REM  Only needed to read PDFs and scans in the admin page. A .docx archive
+REM  needs neither, so a missing one is a warning and not a failure.
+where tesseract >nul 2>&1
+if errorlevel 1 (
+  if exist "%BUNDLE%tesseract-setup.exe" (
+    echo       installing Tesseract -- tick the Hindi language pack
+    "%BUNDLE%tesseract-setup.exe" /SILENT
+    set "PATH=%PATH%;%ProgramFiles%\Tesseract-OCR"
+  ) else (
+    echo       [!] not in the bundle: scans and photographs cannot be read.
+    echo           .docx and PDFs with a text layer still work.
+  )
+) else (
+  echo       Tesseract already installed
+)
+REM  The Hindi pack is a separate file and the installer's default does NOT
+REM  include it. Without it, OCR returns Latin gibberish for Devanagari.
+if exist "%BUNDLE%tessdata\hin.traineddata" (
+  if defined ProgramFiles (
+    copy /y "%BUNDLE%tessdata\*.traineddata" ^
+            "%ProgramFiles%\Tesseract-OCR\tessdata\" >nul 2>&1
+  )
+)
+
+where pdftotext >nul 2>&1
+if errorlevel 1 (
+  if exist "%BUNDLE%poppler\bin\pdftotext.exe" (
+    echo       installing poppler to %TARGET%\poppler
+    xcopy /e /i /y /q "%BUNDLE%poppler" "%TARGET%\poppler" >nul
+    echo       [!] add %TARGET%\poppler\bin to PATH, or PDFs will be skipped
+  ) else (
+    echo       [!] poppler not in the bundle: PDFs cannot be read.
+  )
+) else (
+  echo       poppler already installed
+)
+
 REM --- 5. the working folder -------------------------------------------
 echo.
-echo   [4/4] working folder
+echo   [4/5] working folder
 if not exist "%TARGET%"           mkdir "%TARGET%"
 if not exist "%TARGET%\archive"   mkdir "%TARGET%\archive"
 if not exist "%TARGET%\skeletons" mkdir "%TARGET%\skeletons"

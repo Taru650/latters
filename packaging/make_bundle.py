@@ -25,6 +25,23 @@ What goes in, and why each piece is separate
 ``OllamaSetup.exe`` fetched once. If it is missing the installer says so
                   rather than half-installing.
 ``*.bat``         copied verbatim from this directory.
+
+**OCR is not fetched automatically and that is on purpose.** Tesseract and
+poppler ship as Windows installers from third-party builds whose URLs move,
+and silently downloading the wrong architecture is worse than saying so. Put
+these in the bundle root by hand before taking it to the office:
+
+``tesseract-setup.exe``        the UB Mannheim Windows build
+``tessdata/hin.traineddata``   the Hindi pack -- **the installer's default
+                               selection does NOT include it**, and without
+                               it OCR returns Latin gibberish for Devanagari
+``tessdata/eng.traineddata``   needed too: the language order `eng+hin` is
+                               what keeps letter numbers intact
+``poppler/bin/``               pdftotext.exe and pdftoppm.exe
+
+Leave them out and the office can still use .docx and PDFs that have a text
+layer; only scans stop working, and the admin page says so before anyone
+uploads forty of them.
 """
 from __future__ import annotations
 
@@ -151,6 +168,15 @@ def main() -> int:
         if src.exists():
             shutil.copy2(src, out / name)
             print(f"  {name}")
+
+    # Report the OCR pieces rather than fetching them -- see the docstring.
+    print("ocr (add by hand)")
+    for rel, what in (("tesseract-setup.exe", "Tesseract for Windows"),
+                      ("tessdata/hin.traineddata", "Hindi pack"),
+                      ("tessdata/eng.traineddata", "English pack"),
+                      ("poppler/bin/pdftotext.exe", "poppler")):
+        mark = "ok " if (out / rel).exists() else "[!]"
+        print(f"  {mark} {rel}  ({what})")
 
     total = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
     print(f"\n{out}  {total / 1e9:.2f} GB")

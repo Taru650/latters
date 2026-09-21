@@ -52,6 +52,12 @@ templates = Jinja2Templates(directory=str(HERE / "templates"))
 #: Generations are serialised. See the module docstring.
 _GENERATION = asyncio.Semaphore(1)
 
+#: What the admin upload box accepts. .doc and .rtf are excluded on
+#: purpose: LibreOffice must convert them first or the per-run font
+#: information -- the whole basis of the legacy conversion -- is lost.
+UPLOAD_SUFFIXES = (".docx", ".pdf", ".png", ".jpg", ".jpeg",
+                   ".tif", ".tiff", ".bmp")
+
 _MEDIA_TYPES = {
     "txt": "text/plain; charset=utf-8",
     "pdf": "application/pdf",
@@ -185,10 +191,17 @@ def create_app(db: str | Path = "corpus.db",
 
     @app.get("/admin", response_class=HTMLResponse)
     async def admin_page(request: Request):
+        # Say up front which readers are missing. Finding out that scans
+        # cannot be read by uploading forty of them and getting forty
+        # identical errors is the wrong order.
+        from ..ocr import available, ocr_languages
+        tools = available()
         return templates.TemplateResponse(request, "admin.html", {
             "stats": ws.store.stats(), "model": app.state.model,
             "skeletons": sorted(p.name for p in ws.skeleton_dir.glob("*.md"))
                          if ws.skeleton_dir.is_dir() else [],
+            "ocr": {"missing": [n for n, ok in tools.items() if not ok],
+                    "hindi": "hin" in ocr_languages()},
         })
 
     # --------------------------------------------------------------- drafting
@@ -281,16 +294,18 @@ def create_app(db: str | Path = "corpus.db",
         try:
             saved = []
             for f in files:
-                if not (f.filename or "").lower().endswith(".docx"):
+                name = (f.filename or "").lower()
+                if not name.endswith(UPLOAD_SUFFIXES):
                     continue
                 dest = staged / Path(f.filename).name
                 dest.write_bytes(await f.read())
                 saved.append(dest)
             if not saved:
                 raise HTTPException(
-                    422, "No .docx files. Convert .doc and .rtf first with "
-                         "LibreOffice: it preserves the per-run font "
-                         "information this pipeline depends on.")
+                    422, "Nothing readable here. Accepted: .docx, .pdf, and "
+                         "scans or photographs (.png .jpg .tif). Convert .doc "
+                         "and .rtf first with LibreOffice -- it preserves the "
+                         "per-run font information this pipeline depends on.")
             result = await asyncio.to_thread(_ingest, ws, staged)
         finally:
             shutil.rmtree(staged, ignore_errors=True)
@@ -418,35 +433,63 @@ def _safe_skeleton_path(root: Path, name: str) -> Path:
 
 def _ingest(ws: Workspace, folder: Path) -> dict:
     """Convert, segment, score and store an uploaded batch. Runs in a thread."""
-    converted, skipped = [], []
-    for path in sorted(folder.glob("*.docx")):
+    converted, skipped, notes = [], [], []
+    for path in sorted(p for p in folder.iterdir()
+                       if p.suffix.lower() in UPLOAD_SUFFIXES):
+        suffix = path.suffix.lower()
         try:
-            doc = read_document(path)
+            if suffix == ".docx":
+                doc, report = read_document(path), None
+            else:
+                from ..ocr import read_image, read_pdf
+                doc, report = (read_pdf(path) if suffix == ".pdf"
+                               else read_image(path))
         except (UnsupportedFormat, Exception) as exc:
             skipped.append({"file": path.name,
                             "reason": str(exc).splitlines()[0]})
             continue
+
+        # A PDF or a scan is already Unicode, so every run carries font=None
+        # and convert_document passes it through. Calling it anyway keeps one
+        # code path and costs nothing.
         text, _ = convert_document(doc, rescue_latin=True)
         text, _ = repair_text(text)
-        converted.append((path.name, text))
+
+        # The tier and the OCR confidence travel with the text. Without the
+        # confidence an OCR'd letter scores like a clean DOCX: the validator
+        # only catches ILLEGAL Devanagari, and a misrecognised word is
+        # normally perfectly legal Devanagari that is simply wrong.
+        tier = "docx" if report is None else report.tier
+        penalty = 1.0 if report is None else report.confidence
+        converted.append((path.name, text, tier, penalty))
+        if report is not None:
+            notes.extend(report.warnings)
+            if report.tier == "ocr":
+                notes.append(
+                    f"{path.name}: read by OCR over {report.ocr_pages} page(s), "
+                    f"mean confidence "
+                    f"{report.mean_word_confidence:.0f}/100. OCR text is a "
+                    f"transcription, not the original -- read it before you "
+                    f"rely on it, and check the letter number by eye.")
 
     existing = [r["text"] for r in ws.store.db.execute("SELECT text FROM letters")]
-    vocab = build_vocabulary(existing + [t for _, t in converted])
+    vocab = build_vocabulary(existing + [t for _, t, _, _ in converted])
 
     rows: list[LetterRow] = []
     per_file = []
-    for name, text in converted:
+    for name, text, tier, penalty in converted:
         segs = split_letters(text)
-        per_file.append({"file": name, "letters": len(segs)})
+        per_file.append({"file": name, "letters": len(segs), "source": tier})
         for i, seg in enumerate(segs, 1):
             q = assess(seg.text, vocabulary=vocab or None)
             comp = seg.completeness()
-            score = trust_score(q.score, comp, "docx")
+            conv = q.score * penalty
+            score = trust_score(conv, comp, tier)
             subject = extract_fields(seg.text).subject
             rows.append(LetterRow(
                 source_file=name, seq=i, text=seg.text,
                 start_line=seg.start_line, end_line=seg.end_line,
-                source_tier="docx", conversion_confidence=q.score,
+                source_tier=tier, conversion_confidence=conv,
                 completeness=comp, trust=score, verdict=verdict(score),
                 opened_by=seg.opened_by, form=seg.form.value,
                 anchors=seg.anchors, violations=q.violations,
@@ -454,7 +497,8 @@ def _ingest(ws: Workspace, folder: Path) -> dict:
                 subject=subject.value if subject else None))
     inserted, duplicates = ws.store.add(rows)
     return {"files": per_file, "skipped": skipped, "inserted": inserted,
-            "duplicates": duplicates, "stats": ws.store.stats()}
+            "duplicates": duplicates, "notes": notes,
+            "stats": ws.store.stats()}
 
 
 def _write_export(text: str, fmt: str, stem: Path,

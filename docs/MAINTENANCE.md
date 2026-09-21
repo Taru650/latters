@@ -132,6 +132,49 @@ So `latters classify` prints a coverage warning naming the departments below
 the support floor. The fix is more letters in those departments, or the user
 setting the department by hand. It is not a threshold.
 
+## PDFs and scans (`ocr.py`)
+
+The admin page accepts `.docx`, `.pdf` and images. Everything here is a
+subprocess call to `pdftotext`, `pdftoppm` or `tesseract` — no Python
+wheels, same trade LibreOffice already gets. Four things were measured and
+each one decides a line:
+
+**A PDF with a text layer is never OCR'd.** OCR over existing text throws
+away a perfect extraction for a 98% one. `pdftotext` first, always.
+
+**`OCR_LANGS = "eng+hin"`, and the order is load-bearing.** Measured at
+300 dpi against known ground truth:
+
+| | char accuracy | letter number |
+|---|---:|---|
+| `-l hin` | 0.9513 | **destroyed** |
+| `-l hin+eng` | 0.9781 | **destroyed** |
+| `-l eng+hin` | **0.9805** | recovered exactly |
+
+With `hin` alone Tesseract forces Latin and ASCII digits into Devanagari:
+`F.No. DEO/SRN/2024/1187` came out `8४0. 0£50/579/2024/787`. That is not 3%
+of characters — the letter number carries the branch code, and the branch
+code gives the department *exactly*, better than the classifier, which
+cannot predict five of this office's departments at all.
+
+**OCR output is Unicode, so it must skip the font conversion.** Runs carry
+`font=None`; passing real Devanagari through the Kruti Dev substitution
+would destroy it.
+
+**Tesseract's own confidence is folded into trust.** Mean word confidence
+measured 92–94 on real letters and **11.3 on pure noise**, so it separates a
+usable scan from a failed one. Without it an OCR'd letter scores like a
+clean DOCX — the validator only catches *illegal* Devanagari, and a
+misrecognised word is normally perfectly legal Devanagari that is wrong.
+`OcrReport.confidence` rescales 100→1.0 and 60→0.0 and multiplies the
+conversion score, which combined with `SOURCE_TIERS["ocr"] = 0.4` puts a
+clean scan around trust 0.80 — **`review`, not `index`.** That is the point:
+a transcription should wait for a human.
+
+The accuracy figures come from a *rendered* PDF, which is the best case. A
+real scan — skewed, 200 dpi, a fax — will be worse, and nothing here has
+been tested on one.
+
 ## Adding a font mapping
 
 `src/latters/data/fonts/*.tsv`, one `legacy<TAB>unicode<TAB>note` per line.

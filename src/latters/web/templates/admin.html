@@ -8,10 +8,25 @@
 
 <section class="pane">
   <h2>पुराने पत्र जोड़ें</h2>
-  <p class="meta">केवल .docx। पुरानी .doc/.rtf फाइलें पहले LibreOffice से बदलें।
+  <p class="meta">.docx, .pdf, और स्कैन/फोटो (.png .jpg .tif)।
+     पुरानी .doc/.rtf फाइलें पहले LibreOffice से बदलें।
      <span class="en">LibreOffice preserves the per-run font information this pipeline depends on.</span></p>
-  <input type="file" id="files" multiple accept=".docx">
+  <input type="file" id="files" multiple
+         accept=".docx,.pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp">
   <button id="upload" class="primary">जोड़ें</button>
+  {% if ocr.missing %}
+  <p class="warn">⚠ स्कैन/फोटो नहीं पढ़े जा सकेंगे — {{ ocr.missing|join(', ') }}
+     स्थापित नहीं है। .docx और text-layer वाली .pdf फिर भी चलेंगी।
+     <span class="en">Install the offline bundle; see packaging/install.bat.</span></p>
+  {% elif not ocr.hindi %}
+  <p class="warn">⚠ Tesseract में हिंदी भाषा पैक नहीं है (<code>hin</code>)।
+     स्कैन से देवनागरी नहीं पढ़ी जाएगी।</p>
+  {% endif %}
+  <p class="meta">स्कैन से पढ़ा गया पाठ <b>प्रतिलिपि है, मूल नहीं</b> — लगभग
+     98% अक्षर सही आते हैं (साफ़ 300 dpi स्कैन पर मापा गया)। भरोसा अंक अपने आप
+     कम रखा जाता है। <b>पत्रांक और अंक आँख से जाँचिए।</b>
+     <span class="en">OCR text is a transcription. Its trust score is
+     reduced by Tesseract's own confidence; check the letter number by eye.</span></p>
   <pre id="uploadlog" class="log" hidden></pre>
 </section>
 

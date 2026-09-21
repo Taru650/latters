@@ -198,10 +198,14 @@ def test_rescue_latin_round_trips(tmp_path):
     assert used["(rescued-latin)"] == len("DEO/RPR/2024")
 
 
-def test_pdf_is_refused_with_the_reason(tmp_path):
+def test_a_pdf_with_nothing_readable_in_it_is_refused(tmp_path):
+    """PDFs are read now (see test_ocr.py), but a truncated or empty one has
+    to fail loudly rather than be stored as a letter with no text. The old
+    version of this test asserted that ALL PDFs were refused; that contract
+    changed when the admin page started accepting them."""
     p = tmp_path / "x.pdf"
     p.write_bytes(b"%PDF-1.4")
-    with pytest.raises(UnsupportedFormat, match="logical-stream"):
+    with pytest.raises(Exception):
         read_document(p)
 
 
