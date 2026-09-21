@@ -319,4 +319,6 @@ whether the GPU deficit was PCIe transfer or real.
 | everything slow, disk at 100% | the spinning disk; see Step 0 |
 | `the web pages need the optional extras` | `pip install -e ".[web]"` |
 | PDF export fails, DOCX works | LibreOffice; export DOCX and print from Word |
+| `source file could not be loaded` from LibreOffice | the Writer module is missing, not your letter — it fails on a plain `.txt` too. Install the full LibreOffice, not `-core` |
+| PDF shows boxes where the Hindi should be | the PDF says Nirmala UI and that font is not installed. It ships with Windows 8 and later; on Linux install `fonts-lohit-deva` or another Devanagari font |
 | page loads but nothing happens on click | open the browser console; the JavaScript is served from `/static/app.js`, not a CDN |

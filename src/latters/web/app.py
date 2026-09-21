@@ -52,6 +52,13 @@ templates = Jinja2Templates(directory=str(HERE / "templates"))
 #: Generations are serialised. See the module docstring.
 _GENERATION = asyncio.Semaphore(1)
 
+_MEDIA_TYPES = {
+    "txt": "text/plain; charset=utf-8",
+    "pdf": "application/pdf",
+    "docx": ("application/vnd.openxmlformats-officedocument"
+             ".wordprocessingml.document"),
+}
+
 
 class Workspace:
     """Everything the app needs, rebuilt when the corpus changes.
@@ -243,8 +250,12 @@ def create_app(db: str | Path = "corpus.db",
         name = f"letter-{date.today():%Y%m%d}-{uuid.uuid4().hex[:8]}"
         path = await asyncio.to_thread(
             _write_export, text, fmt, export_dir / name, ws.template_docx)
+        # Send the real type. octet-stream makes Windows offer "open with"
+        # instead of Word, and a mail client attaching the file passes the
+        # wrong type on to the recipient -- for a letter that goes out of the
+        # office, that is the reader's problem, not ours.
         return FileResponse(path, filename=path.name,
-                            media_type="application/octet-stream")
+                            media_type=_MEDIA_TYPES[fmt])
 
     # ------------------------------------------------------------------ admin
     @app.post("/api/upload")

@@ -153,6 +153,39 @@ def test_exported_docx_is_a_readable_package(client):
     assert "कार्यालय" in doc.blocks[0].raw_text
 
 
+def test_export_declares_the_real_media_type(client):
+    """octet-stream makes Windows offer "open with" instead of Word, and a
+    mail client attaching the file passes the wrong type to the recipient."""
+    want = {"txt": "text/plain",
+            "docx": "application/vnd.openxmlformats-officedocument"
+                    ".wordprocessingml.document"}
+    for fmt, prefix in want.items():
+        r = client.post(f"/api/export/{fmt}", json={"text": "क"})
+        assert r.headers["content-type"].startswith(prefix), fmt
+
+
+@pytest.mark.skipif(not (shutil.which("soffice") or shutil.which("libreoffice")),
+                    reason="PDF export needs LibreOffice")
+def test_pdf_export_produces_a_pdf_with_the_devanagari_intact(client):
+    """The DOCX is only half the path: LibreOffice has to load the package
+    and keep the text. A PDF whose text layer is empty prints fine and is
+    unsearchable, so assert on the text, not just the magic bytes."""
+    text = "कार्यालय जिला शिक्षा अधिकारी, सारण\nविषय: मासिक समीक्षा बैठक।\nविश्वासभाजन"
+    r = client.post("/api/export/pdf", json={"text": text})
+    if r.status_code in (501, 502, 504):
+        pytest.skip(f"LibreOffice unusable here: {r.json()['detail'][:80]}")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/pdf")
+    assert r.content.startswith(b"%PDF-")
+    out = client.workdir / "exported.pdf"
+    out.write_bytes(r.content)
+    if shutil.which("pdftotext"):
+        import subprocess
+        got = subprocess.run(["pdftotext", str(out), "-"],
+                             capture_output=True).stdout.decode("utf-8", "replace")
+        assert "समीक्षा" in got and "विश्वासभाजन" in got
+
+
 def test_empty_export_is_rejected(client):
     assert client.post("/api/export/docx", json={"text": "  "}).status_code == 422
 
