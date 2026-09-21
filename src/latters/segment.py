@@ -52,6 +52,11 @@ class Form(Enum):
     LETTER = "letter"
     #: आदेश, ज्ञापन, अधिसूचना, परिपत्र -- issued, not sent.
     ORDER = "order"
+    #: A पृष्ठांकन / प्रतिलिपि block: the copy-forwarding tail of the letter
+    #: above it. It carries its OWN ज्ञापांक and दिनांक, which is exactly
+    #: what the boundary rule fires on, so it split off as a letter of its
+    #: own. It is not one. Merged back into its parent.
+    ENDORSEMENT = "endorsement"
     #: No addressee and none of an order's own signals either. Most likely a
     #: truncated segment, and scored as one.
     FRAGMENT = "fragment"
@@ -66,29 +71,71 @@ _ADDRESSEE_LINE = re.compile(r"^\s*(?:सेवा\s*में|प्रति|�
 _MARKER_WINDOW_LINES = 14
 
 
+#: An endorsement is short, carries a distribution line, and has none of a
+#: letter's own body furniture. Measured: 98 of 112 fragments in the sample
+#: archive were these, median 220 characters.
+MAX_ENDORSEMENT_CHARS = 600
+
+
+def is_endorsement(text: str, anchors: dict[str, int]) -> bool:
+    """Is this the copy-forwarding tail of the letter above it?
+
+    Requires a distribution line AND the absence of everything that starts a
+    letter of its own -- no subject, no salutation, no addressee. Its own
+    number and date are expected: that is what made it look like a new
+    letter in the first place.
+    """
+    if len(text) > MAX_ENDORSEMENT_CHARS:
+        return False
+    if not anchors.get("distribution"):
+        return False
+    return not any(anchors.get(k) for k in ("subject", "salutation", "addressee"))
+
+
 def detect_form(text: str, anchors: dict[str, int] | None = None) -> Form:
     """Classify the genre before scoring completeness against it.
 
-    Conservative on purpose. A document with no addressee is only treated as
-    an order if it either says so or behaves like one -- a number, a date and
-    a real body. Otherwise it stays a FRAGMENT and keeps its low score,
-    because the alternative is laundering every truncated segment into
-    "complete" by calling it an order.
+    Precedence, most specific evidence first. Written out rather than
+    reordered ad hoc, because two earlier arrangements each fixed one case
+    and broke another:
+
+    1. An addressee line means it was SENT to someone, so it is a letter,
+       whatever heading it carries. `सेवा में` outranks everything.
+    2. An explicit `आदेश` / `ज्ञापन` heading means an order. This has to sit
+       above the endorsement test: a short order ending in a प्रतिलिपि line
+       is indistinguishable from an endorsement by length alone, and an
+       endorsement never carries such a heading.
+    3. A short distribution-only block is an endorsement -- the copy
+       forwarding tail of the letter above it.
+    4. A number, a date and a real body behave like an order even with no
+       heading.
+    5. Otherwise a fragment.
+
+    Conservative at step 4 on purpose. The obvious failure mode of
+    form-awareness is laundering every truncated segment into "complete" by
+    calling it an order, so a document with no addressee becomes one only if
+    it says so or behaves like one.
     """
+    a = anchors or {}
     if _ADDRESSEE_LINE.search(text):
         return Form.LETTER
     head = "\n".join(text.splitlines()[:_MARKER_WINDOW_LINES])
     if _ORDER_MARKER.search(head):
         return Form.ORDER
-    a = anchors or {}
+    if is_endorsement(text, a):
+        return Form.ENDORSEMENT
     if a.get("letter_number") and a.get("date") and len(text) >= BODY_TARGET_CHARS:
         return Form.ORDER
     return Form.FRAGMENT
 
 
+
 #: Per-form completeness weights. Each set sums to 1.0 with BODY_WEIGHT.
 FORM_WEIGHTS: dict[Form, dict[str, float]] = {
     Form.LETTER: dict(COMPLETENESS_WEIGHTS),
+    # Never scored on its own -- it is merged into its parent -- but present
+    # so the table is total and a stray one cannot KeyError.
+    Form.ENDORSEMENT: {"letter_number": 0.40, "date": 0.25, "distribution": 0.20},
     # An order is identified by its number and date, carries the issuing
     # office's header, and ends in a distribution list. It has no addressee,
     # no subject line and no valediction, and must not be docked for them.
@@ -281,7 +328,33 @@ def segment(text: str, anchors: list[Anchor] = ANCHORS) -> list[Segment]:
                 counts[name] = counts.get(name, 0) + 1
         segments.append(Segment(lo, hi, body, counts, reason))
 
-    return _merge_runts(segments)
+    return _merge_runts(_merge_endorsements(segments))
+
+
+def _merge_endorsements(segments: list[Segment]) -> list[Segment]:
+    """Fold each endorsement back into the letter it belongs to.
+
+    A पृष्ठांकन carries its own ज्ञापांक and दिनांक, so the
+    `letter-number-after-closing` rule opens a new segment on it. That rule
+    is right in general and wrong here, and the cheapest correct place to
+    undo it is afterwards, where the whole block can be seen at once.
+
+    An endorsement with no preceding letter -- a file that opens mid-dispatch
+    -- is kept, because dropping text is worse than keeping an odd segment.
+    """
+    out: list[Segment] = []
+    for seg in segments:
+        if out and seg.form is Form.ENDORSEMENT:
+            prev = out[-1]
+            out[-1] = Segment(
+                prev.start_line, seg.end_line,
+                prev.text + "\n" + seg.text,
+                {k: prev.anchors.get(k, 0) + seg.anchors.get(k, 0)
+                 for k in set(prev.anchors) | set(seg.anchors)},
+                prev.opened_by)
+            continue
+        out.append(seg)
+    return out
 
 
 def _merge_runts(segments: list[Segment]) -> list[Segment]:

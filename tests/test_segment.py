@@ -285,7 +285,8 @@ def test_word_initial_matra_is_detected_on_every_line():
 
 
 # --- document form, found on a real archive -------------------------------
-from latters.segment import FORM_WEIGHTS, Form, detect_form  # noqa: E402
+from latters.segment import (FORM_WEIGHTS, Form, detect_form,  # noqa: E402
+                             is_endorsement)
 
 ORDER = """कार्यालय, प्रखण्ड विकास पदाधिकारी, नगरा, सारण।
 आदेश
@@ -360,3 +361,60 @@ def test_store_round_trips_the_form():
         s.add([LetterRow("a.docx", 1, ORDER, trust=0.9, form="order")])
         assert s.get(1)["form"] == "order"
         assert s.stats()["by_form"] == {"order": 1}
+
+
+# --- endorsements, found on the operator's archive ------------------------
+ENDORSEMENT = """ज्ञापांक---------------/रा०, दिनांक----------------
+प्रतिलिपि:- समाहर्त्ता, सारण छपरा को सादर सूचनार्थ समर्पित।
+प्रतिलिपि:- उप विकास आयुक्त, सारण को सूचनार्थ प्रेषित।"""
+
+
+def test_an_endorsement_merges_into_the_letter_above_it():
+    """A पृष्ठांकन carries its OWN ज्ञापांक and दिनांक, which is exactly what
+    the letter-number-after-closing rule fires on, so 98 of 112 "fragments"
+    in the sample archive were copy-forwarding tails split off as letters of
+    their own. They are part of the same dispatch."""
+    segs = segment(letter(1) + "\n" + ENDORSEMENT)
+    assert len(segs) == 1
+    assert "प्रतिलिपि" in segs[0].text
+    assert segs[0].form is Form.LETTER
+
+
+def test_two_letters_each_with_an_endorsement_stay_two():
+    segs = segment("\n".join([letter(1), ENDORSEMENT, letter(2), ENDORSEMENT]))
+    assert len(segs) == 2
+    assert all("प्रतिलिपि" in s.text for s in segs)
+
+
+def test_an_endorsement_needs_a_distribution_line():
+    """Number plus date alone is an order's signature, not an endorsement's."""
+    assert not is_endorsement("ज्ञापांक-12, दिनांक 01.01.2024\nकुछ पाठ",
+                              {"letter_number": 1, "date": 1})
+
+
+def test_a_real_letter_is_never_an_endorsement():
+    """It has a subject and a salutation of its own."""
+    seg = segment(letter(1))[0]
+    assert not is_endorsement(seg.text, seg.anchors)
+
+
+def test_a_long_block_with_prat_ilipi_is_not_an_endorsement():
+    """An order ends with a distribution list too. Length separates them."""
+    long_order = ORDER + "\n" + ("उक्त के आलोक में आवश्यक कार्यवाही की जाय। " * 30)
+    assert not is_endorsement(long_order, {"distribution": 1})
+
+
+def test_a_leading_endorsement_is_kept_not_dropped():
+    """A file that opens mid-dispatch has an endorsement with no parent.
+    Keeping an odd segment beats losing text."""
+    segs = segment(ENDORSEMENT + "\n" + letter(1))
+    assert segs
+    assert any("प्रतिलिपि" in s.text for s in segs)
+
+
+def test_an_explicit_order_heading_beats_the_endorsement_heuristic():
+    """A short आदेश ending in a प्रतिलिपि line looks exactly like an
+    endorsement to the length-and-distribution test. An endorsement never
+    carries an आदेश heading of its own, so the heading wins."""
+    assert detect_form(ORDER, {"distribution": 1, "letter_number": 1,
+                               "date": 1}) is Form.ORDER

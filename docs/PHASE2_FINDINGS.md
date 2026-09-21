@@ -218,3 +218,60 @@ Corpus mean trust rose 0.891 → 0.904 and indexed letters 458 → 488, with the
 merged block carries several complete anatomies — two or more closings, two
 or more subject lines. This one carries zero of each. The warning now counts
 them and distinguishes a failed split from one long document, and says which.
+
+
+---
+
+## 7. Endorsements are not letters either
+
+With form-awareness in place, 112 segments remained `fragment`. Reading them
+showed **98 were endorsement blocks**:
+
+```
+ज्ञापांक---------------/रा०, दिनांक----------------
+प्रतिलिपि:- समाहर्त्ता, सारण छपरा को सादर सूचनार्थ समर्पित।
+प्रतिलिपि:- उप विकास आयुक्त, सारण को सूचनार्थ प्रेषित।
+```
+
+Median 220 characters; 99 of 112 carried a letter number and 102 a date, but
+only 3 a subject line.
+
+A पृष्ठांकन carries **its own ज्ञापांक and दिनांक**, which is precisely what
+the `letter-number-after-closing` boundary rule fires on. The rule is right
+in general and wrong here: an endorsement is the copy-forwarding tail of the
+letter above it, part of the same dispatch, not a letter of its own.
+
+Detected by a distribution line plus the absence of everything that starts a
+letter — no subject, no salutation, no addressee — under 600 characters, and
+merged back into its parent. An endorsement with no preceding letter is kept
+rather than dropped: losing text is worse than an odd segment.
+
+| | before | after |
+|---|---:|---:|
+| segments | 589 | **475** |
+| letter | 378 | 378 |
+| order | 99 | 85 |
+| **fragment** | **112** | **12** |
+| needing review | 76 | **10** |
+
+475 is a far more believable count for five files than 589.
+
+### Form precedence, written out
+
+Two arrangements each fixed one case and broke another, so the order is now
+explicit in the code:
+
+1. **An addressee line means letter**, whatever heading it carries. `सेवा में`
+   outranks everything.
+2. **An explicit `आदेश` / `ज्ञापन` heading means order** — above the
+   endorsement test, because a short order ending in a प्रतिलिपि line is
+   indistinguishable from an endorsement by length alone.
+3. A short distribution-only block is an **endorsement**.
+4. Number + date + real body behaves like an **order** even unheaded.
+5. Otherwise **fragment**.
+
+### The 12 that remain
+
+Annexure tables (`पदाधिकारी का नाम, पदनाम एवं कार्यालय का नाम`), body
+continuations, and an interrogatory (`(ख) क्या यह सही है कि ...`). Genuinely
+ambiguous, 2.5% of the corpus, correctly held for human review.
