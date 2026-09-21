@@ -62,6 +62,26 @@ across five axes is itself a hint that the degradations are too polite.
 **One real scanned letter from the office would be worth more than this
 entire table.** Until then, treat the numbers as an upper bound.
 
+## Postscript: five real letters arrived, and they were worth more
+
+They changed two decisions this table could not have:
+
+1. **A PDF text layer is used only if it is readable.** OCR beat the text
+   layer on all five. Four text layers scored 0.000 on the validator — the
+   PDFs embed subsetted fonts with no ToUnicode map, so `विषय:-` arrives as
+   `ftqq:-` and no mapping recovers it. The fifth was real Hindi with matras
+   dropped and reordered (`दिनांक` → `िदनांक`), which is worse for being
+   plausible. Routing now uses `MIN_TEXT_LAYER_QUALITY`, not a character
+   count.
+
+2. **Confidence is the median, not the mean.** Mean 85.1–91.7 against median
+   93.3–96.0; the gap is the letterhead logo, the round stamp and decorative
+   English. On the mean, no real letter could reach the index threshold.
+
+Neither was visible in any synthetic degradation, and both were wrong in the
+shipped code. The lesson generalises past OCR: **the degradations you can
+imagine are not the ones the real inputs have.**
+
 ## Full results
 
 | axis | setting | char accuracy | Tesseract conf | letter number |

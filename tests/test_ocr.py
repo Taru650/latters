@@ -256,3 +256,71 @@ def test_a_timed_out_scan_is_reported_rather_than_stored_as_a_letter(
     monkeypatch.setattr(ocr, "ocr_image", lambda p, **kw: ("   ", 0.0, 1.0))
     with pytest.raises(UnsupportedFormat):
         ocr.read_image(tmp_path / "blank.png")
+
+
+# --- what five real office letters changed --------------------------------
+def test_an_unreadable_text_layer_falls_back_to_ocr(tmp_path, monkeypatch):
+    """The rule used to be "a PDF with a text layer is never OCR'd", written
+    from a PDF this project generated itself. Five real letters inverted it:
+    four had text layers scoring 0.000 because the PDFs embed subsetted fonts
+    with no ToUnicode map (विषय:- came out ftqq:-), and the fifth carried
+    real Hindi with matras dropped and reordered (दिनांक as िदनांक).
+
+    OCR beat the text layer on all five. The decision is now made on whether
+    the text is READABLE, using the validator that already exists."""
+    from latters import ocr
+
+    garbage = "ftqq:- f{qiq-zzog.zozo o} srq{r{c o+:oo qd 3fft{dc qitqq t " * 6
+    monkeypatch.setattr(ocr, "_pdf_text_layer", lambda p: (garbage, 1))
+    monkeypatch.setattr(ocr, "_ocr_pdf",
+                        lambda p, langs: ("विषय: बैठक की सूचना।", 1, [93.0], [0.0]))
+    _, report = ocr.read_pdf(tmp_path / "x.pdf")
+    assert report.tier == "ocr"
+    assert any("text layer scored" in w for w in report.warnings)
+
+
+def test_a_readable_text_layer_is_still_preferred(tmp_path, monkeypatch):
+    """The inversion must not become "always OCR" -- that would throw away a
+    perfect extraction for a 98% one wherever the PDF is genuinely clean."""
+    from latters import ocr
+
+    good = ("कार्यालय जिला पदाधिकारी सारण छपरा। विषय: मासिक समीक्षा बैठक की "
+            "सूचना। महाशय, उपर्युक्त विषय के प्रसंग में कहना है कि आवश्यक "
+            "कार्यवाही सुनिश्चित करते हुए प्रतिवेदन उपलब्ध कराएँ। ") * 3
+    monkeypatch.setattr(ocr, "_pdf_text_layer", lambda p: (good, 1))
+    monkeypatch.setattr(ocr, "_ocr_pdf",
+                        lambda p, langs: pytest.fail("should not have OCR'd"))
+    _, report = ocr.read_pdf(tmp_path / "x.pdf")
+    assert report.tier == "pdf" and report.confidence == 1.0
+
+
+@needs_tesseract
+@needs_hindi
+def test_confidence_is_the_median_so_a_letterhead_cannot_condemn_the_body(
+        scan_png):
+    """Five real letters: mean 85.1-91.7, median 93.3-96.0. The gap is the
+    letterhead logo, the round stamp and decorative English, all of which
+    recognise badly. On the mean no real letter could ever reach the index
+    threshold; on the median they score what a clean synthetic page does."""
+    import statistics
+    from latters.ocr import ocr_image
+
+    text, reported, _ = ocr_image(scan_png)
+    assert text
+    # It must be the median of the per-word confidences, not their mean.
+    import csv as _csv, subprocess as _sp, tempfile as _tf
+    with _tf.TemporaryDirectory() as t:
+        stem = Path(t) / "p"
+        _sp.run(["tesseract", str(scan_png), str(stem), "-l", OCR_LANGS,
+                 "--psm", "6", "tsv"], capture_output=True, timeout=120)
+        with stem.with_suffix(".tsv").open(encoding="utf-8") as fh:
+            vals = [float(r["conf"]) for r in _csv.DictReader(fh, delimiter="\t")
+                    if (r.get("text") or "").strip() and float(r["conf"]) >= 0]
+    assert abs(reported - statistics.median(vals)) < 0.01
+
+
+def test_the_noise_guard_survives_the_switch_to_the_median():
+    """On pure noise every word is bad, so the median goes down with the mean
+    rather than being rescued by it. Measured: median 8.8 -> multiplier 0.0."""
+    assert OcrReport(tier="ocr", mean_word_confidence=8.8).confidence == 0.0
+    assert OcrReport(tier="ocr", mean_word_confidence=93.3).confidence > 0.80

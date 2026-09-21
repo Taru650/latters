@@ -8,9 +8,31 @@ free, a spinning disk and no internet to install them from.
 
 Four things here were measured, not assumed, and each one changes the output.
 
-**1. A PDF with a text layer must NOT be OCR'd.** Running OCR over text that
-is already there throws away a perfect extraction and replaces it with a 98%
-one. `pdftotext` first, always; OCR only when the page comes back empty.
+**1. A PDF text layer is used only if it is READABLE, not merely present.**
+This started as "a PDF with a text layer is never OCR'd" -- true in
+principle, and wrong on every real file this office has. Five real letters,
+text layer scored by this project's own validator against the OCR of the
+same file:
+
+    file                  text layer          OCR
+    DCHB tour order   review     0.739    clean 0.946
+    Letter 4849       quarantine 0.000    clean 0.978
+    Letter 78/NIC     quarantine 0.000    clean 0.976
+    Letter 8595-C     quarantine 0.000    clean 0.987
+    Letter 1636       quarantine 0.000    clean 0.985
+
+OCR won five times out of five. Four text layers scored zero because the
+PDFs embed subsetted fonts with no ToUnicode map, so pdftotext emits
+arbitrary glyph codes -- `विषय:-` arrives as `ftqq:-`, and no mapping table
+recovers it because the codes differ per subset. The fifth is worse for
+being plausible: real Hindi with matras dropped and reordered, `दिनांक`
+stored as `िदनांक` and `कार्यालय` as `कायालय`. That is the PDF
+glyph-reordering corruption the risk register rates High, and it looks
+correct in a viewer.
+
+So `pdftotext` still runs first, and its output still wins when it is clean
+(running OCR over good text would throw away a perfect extraction for a 98%
+one) -- but it has to clear `MIN_TEXT_LAYER_QUALITY` to be believed.
 
 **2. `eng+hin`, in that order, not `hin`.** Tesseract will force every glyph
 into the scripts you give it. Measured on a rendered letter at 300 dpi
@@ -77,6 +99,35 @@ RASTER_DPI = 300
 #: read as "has text" and the body silently lost.
 MIN_TEXT_LAYER_CHARS = 120
 
+#: A TEXT LAYER IS NOT AUTOMATICALLY WORTH HAVING, AND ON REAL FILES IT
+#: USUALLY IS NOT.
+#:
+#: The original rule here was "a PDF with a text layer is never OCR'd",
+#: written from a PDF this project generated itself. Five real letters from
+#: the office inverted it. Scoring each text layer with the project's own
+#: validator against the OCR of the same file:
+#:
+#:     file                     text layer          OCR
+#:     DCHB tour order      review     0.739    clean 0.946
+#:     Letter 4849          quarantine 0.000    clean 0.978
+#:     Letter 78/NIC        quarantine 0.000    clean 0.976
+#:     Letter 8595-C        quarantine 0.000    clean 0.987
+#:     Letter 1636          quarantine 0.000    clean 0.985
+#:
+#: **OCR won on all five.** Four scored zero because the PDFs embed
+#: subsetted fonts with no ToUnicode map, so pdftotext emits raw glyph
+#: codes -- `विषय:-` came out `ftqq:-`, and no mapping table recovers it
+#: because the codes are arbitrary per subset. The fifth is worse in a
+#: quieter way: real Hindi with matras dropped and reordered, `दिनांक` as
+#: `िदनांक` and `कार्यालय` as `कायालय` -- the exact PDF glyph-reordering
+#: corruption the risk register rates High, which looks correct in a viewer.
+#:
+#: So the decision is made on whether the text is READABLE, not on whether
+#: it exists, using the validator that already exists. The floor is the
+#: project's own `index` threshold: below it a letter is not fit to store,
+#: and if it is not fit to store it is not fit to prefer over OCR.
+MIN_TEXT_LAYER_QUALITY = 0.80
+
 #: Tesseract per-word confidence is 0-100. Below this a word is more likely
 #: wrong than right in practice; the share of such words is what gets folded
 #: into the trust score.
@@ -101,6 +152,7 @@ class OcrReport:
     tier: str                      # "pdf" (text layer) or "ocr"
     pages: int = 0
     ocr_pages: int = 0
+    #: MEDIAN per-word confidence, not mean -- see ocr_image.
     mean_word_confidence: float | None = None
     low_confidence_share: float | None = None
     warnings: list[str] = field(default_factory=list)
@@ -112,8 +164,9 @@ class OcrReport:
         A text-layer PDF returns 1.0: nothing was guessed. For OCR, Tesseract's
         mean word confidence is rescaled so that 100 -> 1.0 and 60 -> 0.0,
         because a page averaging 60 is not "60% right", it is unusable. The
-        noise page measured 11.3 and lands at 0.0; real letters measured 92-94
-        and land near 0.8-0.85.
+        Pure noise measured 11.3 and lands at 0.0; five real office letters
+        measured 93-96 (median) and land at 0.83-0.90, which is what lets a
+        good scan reach the index threshold at all.
         """
         if self.tier != "ocr" or self.mean_word_confidence is None:
             return 1.0
@@ -203,7 +256,28 @@ def ocr_image(path: Path, *, langs: str = OCR_LANGS) -> tuple[str, float, float]
     if not confs:
         return text, 0.0, 1.0
     low = sum(1 for c in confs if c < LOW_WORD_CONF) / len(confs)
-    return text, sum(confs) / len(confs), low
+    # THE MEDIAN, NOT THE MEAN, and five real letters are why. A letterhead
+    # logo, a round stamp and decorative English all recognise badly and drag
+    # the mean down while the body of the letter is fine:
+    #
+    #     DCHB tour order   mean 85.8   median 93.3
+    #     Letter 4849       mean 85.1   median 93.3
+    #     Letter 78/NIC     mean 87.9   median 95.2
+    #     Letter 8595-C     mean 91.7   median 96.0
+    #     Letter 1636       mean 87.3   median 93.3
+    #
+    # On the mean those map to a 0.52-0.79 multiplier and NO real letter can
+    # ever reach the index threshold. On the median they map to 0.83-0.90,
+    # which is what a clean synthetic page also scores -- the real letters
+    # are not worse, the mean was measuring the letterhead.
+    #
+    # The guard still works: on pure noise every word is bad, so the median
+    # goes down with the mean rather than being rescued by it.
+    confs.sort()
+    mid = len(confs) // 2
+    median = (confs[mid] if len(confs) % 2
+              else (confs[mid - 1] + confs[mid]) / 2)
+    return text, median, low
 
 
 def _ocr_pdf(path: Path, *, langs: str) -> tuple[str, int, list[float], list[float]]:
@@ -229,16 +303,31 @@ def _ocr_pdf(path: Path, *, langs: str) -> tuple[str, int, list[float], list[flo
 def read_pdf(path: Path, *, langs: str = OCR_LANGS,
              force_ocr: bool = False) -> tuple[Document, OcrReport]:
     """Read a PDF: text layer if it has one, OCR if it does not."""
+    from .validate import assess
+
     text, pages = ("", 0) if force_ocr else _pdf_text_layer(path)
     report = OcrReport(tier="pdf", pages=pages)
 
-    if force_ocr or len(text.strip()) < MIN_TEXT_LAYER_CHARS * max(pages, 1):
-        if not force_ocr and text.strip():
+    thin = len(text.strip()) < MIN_TEXT_LAYER_CHARS * max(pages, 1)
+    quality = 1.0 if (force_ocr or thin) else assess(text).score
+    unreadable = quality < MIN_TEXT_LAYER_QUALITY
+
+    if force_ocr or thin or unreadable:
+        if not force_ocr and thin and text.strip():
             report.warnings.append(
                 f"{path.name}: a text layer exists but holds only "
                 f"{len(text.strip())} characters over {pages} page(s), which "
                 f"is a scan with a caption rather than a typed document. "
                 f"Read by OCR instead.")
+        elif not force_ocr and unreadable:
+            report.warnings.append(
+                f"{path.name}: the text layer scored {quality:.2f} against "
+                f"the corruption checks, below the {MIN_TEXT_LAYER_QUALITY:.2f} "
+                f"needed to store a letter, so it was read by OCR instead. "
+                f"This is normal for a PDF made from a legacy Hindi font: the "
+                f"embedded font is subsetted with no ToUnicode map, so the "
+                f"text layer is arbitrary glyph codes, or it carries matras "
+                f"in visual order (दिनांक stored as िदनांक).")
         text, n, means, lows = _ocr_pdf(path, langs=langs)
         report = OcrReport(tier="ocr", pages=n or pages, ocr_pages=n,
                            warnings=report.warnings)
@@ -247,7 +336,8 @@ def read_pdf(path: Path, *, langs: str = OCR_LANGS,
             report.low_confidence_share = sum(lows) / len(lows)
     else:
         report.warnings.append(
-            f"{path.name}: read from the PDF text layer. If this file was "
+            f"{path.name}: read from the PDF text layer (quality "
+            f"{quality:.2f}). If this file was "
             f"made from a legacy Hindi font, check a line or two by eye -- a "
             f"PDF can carry reordered matras that look correct in a viewer "
             f"and convert wrongly (और typed `vkSj` can extract as `vkjS`).")

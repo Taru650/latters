@@ -139,8 +139,20 @@ subprocess call to `pdftotext`, `pdftoppm` or `tesseract` — no Python
 wheels, same trade LibreOffice already gets. Four things were measured and
 each one decides a line:
 
-**A PDF with a text layer is never OCR'd.** OCR over existing text throws
-away a perfect extraction for a 98% one. `pdftotext` first, always.
+**A PDF text layer is used only if it is READABLE.** This was the reverse
+until five real office letters were tested. OCR beat the text layer on all
+five: four scored 0.000 on the validator (subsetted fonts with no ToUnicode
+map — `विषय:-` arrives as `ftqq:-`, unrecoverable), and the fifth carried
+real Hindi with matras dropped and reordered (`दिनांक` as `िदनांक`), which
+is the High-rated risk-register corruption and looks right in a viewer.
+`pdftotext` still runs first and still wins when clean, but must clear
+`MIN_TEXT_LAYER_QUALITY = 0.80` — the project's own index threshold.
+
+**Confidence is the MEDIAN per-word value, not the mean.** On those five
+letters mean was 85.1–91.7 and median 93.3–96.0; the gap is the letterhead
+logo, the round stamp and decorative English. On the mean, no real letter
+could ever reach the index threshold. Same lesson as the effort metric, same
+reason: one bad tail must not condemn the whole.
 
 **`OCR_LANGS = "eng+hin"`, and the order is load-bearing.** Measured at
 300 dpi against known ground truth:
