@@ -282,3 +282,81 @@ def test_word_initial_matra_is_detected_on_every_line():
     the whole document and the check effectively never fired."""
     q = assess("ठीक पंक्ति है\nिजला बैंकिंग कोषांग\nदूसरी ठीक पंक्ति")
     assert q.violations.get("matra_word_initial") == 1
+
+
+# --- document form, found on a real archive -------------------------------
+from latters.segment import FORM_WEIGHTS, Form, detect_form  # noqa: E402
+
+ORDER = """कार्यालय, प्रखण्ड विकास पदाधिकारी, नगरा, सारण।
+आदेश
+ज्ञापांक-1254/स्था०, दिनांक 25.10.2022
+श्री हृदया प्रसाद, तत्कालीन जनसेवक, प्रखंड एकमा के विरुद्ध संचालित अनुशासनिक
+कार्यवाही के संचालन हेतु संचालन पदाधिकारी नियुक्त किया जाता है। आरोपित कर्मी
+के विरुद्ध आरोप पत्र निर्गत किया जा चुका है और साक्ष्य संकलित किए जा रहे हैं।
+प्रतिलिपि:- उप विकास आयुक्त, सारण को सूचनार्थ प्रेषित।"""
+
+
+def test_an_order_is_not_a_broken_letter():
+    """Measured on a real archive: 211 of 589 segments have no addressee and
+    169 of those scored below 0.7 -- 29% of the corpus marked defective for
+    being the wrong genre. An आदेश is addressed to nobody, has no विषय line
+    and ends with a distribution list rather than भवदीय."""
+    seg = segment(ORDER)[0]
+    assert seg.form is Form.ORDER
+    assert seg.completeness() >= 0.8
+    assert "addressee" not in seg.missing()
+    assert "closing" not in seg.missing()
+
+
+def test_a_letter_is_still_scored_as_a_letter():
+    seg = segment(letter(1))[0]
+    assert seg.form is Form.LETTER
+    assert seg.completeness() == 1.0
+
+
+def test_an_addressee_always_means_letter():
+    """Even with an आदेश heading: if it says सेवा में, it was sent to someone."""
+    assert detect_form("आदेश\nसेवा में,\nअंचल अधिकारी,\nकुछ पाठ") is Form.LETTER
+
+
+@pytest.mark.parametrize("marker", [
+    "आदेश", "कार्यालय आदेश", "ज्ञापन", "कार्यालय ज्ञापन",
+    "अधिसूचना", "परिपत्र", "संकल्प",
+])
+def test_order_markers(marker):
+    assert detect_form(f"कार्यालय जिला राजस्व शाखा\n{marker}\n"
+                       "ज्ञापांक-1/2024, दिनांक 01.01.2024\n" + "क" * 400) is Form.ORDER
+
+
+def test_a_marker_deep_in_the_body_is_not_a_heading():
+    body = "\n".join(["कुछ पाठ"] * 30) + "\nआदेश\n"
+    assert detect_form(body) is not Form.ORDER
+
+
+def test_a_fragment_is_not_laundered_into_an_order():
+    """The risk of form-awareness: calling every truncated segment an order
+    to make its score go up. A document with no addressee is only an order
+    if it says so, or behaves like one -- number, date and a real body."""
+    seg = segment("कुछ अधूरा पाठ जो न पत्र है न आदेश और जिसमें कोई संख्या नहीं है "
+                  "और यह काफी लंबा है ताकि खंड बने।")[0]
+    assert seg.form is Form.FRAGMENT
+    assert seg.completeness() < 0.7
+
+
+def test_a_numbered_dated_document_with_a_body_counts_as_an_order():
+    text = ("कार्यालय जिला राजस्व शाखा\nज्ञापांक-116, दिनांक 18.03.2024\n"
+            + "उक्त के आलोक में आवश्यक कार्यवाही सुनिश्चित की जाय। " * 12)
+    assert detect_form(text, {"letter_number": 1, "date": 1}) is Form.ORDER
+
+
+def test_every_form_weight_set_totals_one():
+    from latters.segment import BODY_WEIGHT
+    for form, weights in FORM_WEIGHTS.items():
+        assert abs(sum(weights.values()) + BODY_WEIGHT - 1.0) < 1e-9, form
+
+
+def test_store_round_trips_the_form():
+    with Store() as s:
+        s.add([LetterRow("a.docx", 1, ORDER, trust=0.9, form="order")])
+        assert s.get(1)["form"] == "order"
+        assert s.stats()["by_form"] == {"order": 1}

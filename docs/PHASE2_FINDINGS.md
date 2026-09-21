@@ -166,3 +166,55 @@ latters gold extract <archive> -o review/ -n 200 --blind-fraction 0.2
 
 Until that comes back, treat every number in this document as a measure of
 internal consistency and nothing more.
+
+
+---
+
+## 6. Not every document is a letter (found on the operator's first run)
+
+`latters audit` flagged one 9,148-character segment, 5× above p95, and said
+it was "almost certainly several letters that never got split". It was not.
+It is a single disciplinary **आदेश**: 70 lines, no addressee, no विषय line,
+no भवदीय, ending in a signature and four `प्रतिलिपि:` lines.
+
+It scored 0.5 completeness because the scorer assumed every document has a
+letter's anatomy. Measured across the archive:
+
+| | |
+|---|---:|
+| segments with no addressee at all | **211 of 589** |
+| ...of those, scoring under 0.7 | **169** |
+| carrying an explicit `कार्यालय आदेश` marker | 15 |
+
+**29% of the corpus was being marked defective for being the wrong genre.**
+
+### Form-aware completeness
+
+Three forms, each scored against its own anatomy:
+
+| form | identified by | weighted on |
+|---|---|---|
+| `letter` | `सेवा में` / `प्रति` on its own line | number, date, addressee, subject, closing |
+| `order` | `आदेश` / `ज्ञापन` / `अधिसूचना` / `परिपत्र` heading, **or** a number + date + real body | number, date, header, distribution |
+| `fragment` | neither | a letter's weights — so it stays penalised |
+
+The `fragment` class is the point. The obvious failure mode of form-awareness
+is laundering every truncated segment into "complete" by calling it an order,
+so a document with no addressee becomes an order only if it *says* so or
+*behaves* like one. Result:
+
+| form | n | median completeness | under 0.7 |
+|---|---:|---:|---:|
+| letter | 378 | 1.000 | 3 |
+| order | 99 | 0.850 | **0** |
+| fragment | 112 | 0.482 | 112 |
+
+Corpus mean trust rose 0.891 → 0.904 and indexed letters 458 → 488, with the
+112 genuine fragments still correctly quarantined.
+
+### The audit's own diagnosis was wrong, too
+
+"Almost certainly several letters" was an assertion with nothing behind it. A
+merged block carries several complete anatomies — two or more closings, two
+or more subject lines. This one carries zero of each. The warning now counts
+them and distinguishes a failed split from one long document, and says which.

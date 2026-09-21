@@ -330,7 +330,8 @@ def cmd_segment(args: argparse.Namespace) -> int:
                 start_line=seg.start_line, end_line=seg.end_line,
                 source_tier=args.tier, conversion_confidence=q.score,
                 completeness=comp, trust=score, verdict=verdict(score),
-                opened_by=seg.opened_by, anchors=seg.anchors,
+                opened_by=seg.opened_by, form=seg.form.value,
+                anchors=seg.anchors,
                 violations=q.violations, missing=seg.missing(),
                 subject=subject.value if subject else None))
 
@@ -368,15 +369,20 @@ def cmd_audit(args: argparse.Namespace) -> int:
     converted = _convert_all(Path(args.path), args)
     fired: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
+    forms: Counter[str] = Counter()
     lengths: list[int] = []
     completeness: list[float] = []
+    longest = None
     for _, text in converted:
         for line in tag_lines(text):
             fired.update(line.anchors)
         for seg in split(text):
             reasons[seg.opened_by] += 1
+            forms[seg.form.value] += 1
             lengths.append(seg.body_chars)
             completeness.append(seg.completeness())
+            if longest is None or seg.body_chars > longest.body_chars:
+                longest = seg
 
     print(f"files {len(converted)}   letters {sum(reasons.values())}\n")
     print("anchor firing (lines)")
@@ -404,10 +410,37 @@ def cmd_audit(args: argparse.Namespace) -> int:
               f"p95={pct(lengths,.95)} max={lengths[-1]}")
         print(f"completeness   p10={pct(completeness,.1)} median={pct(completeness,.5)} "
               f"perfect={sum(1 for c in completeness if c >= 1.0)}")
-        if lengths[-1] > 5 * pct(lengths, .95):
-            print(f"\n!! The longest segment ({lengths[-1]} chars) is far above p95 "
-                  f"({pct(lengths,.95)}).\n!! That is almost certainly several "
-                  "letters that never got split.")
+        if lengths[-1] > 5 * pct(lengths, .95) and longest is not None:
+            # A block of MERGED letters carries several complete anatomies --
+            # two or more closings, two or more subjects. One genuinely long
+            # order carries none of either. Saying "almost certainly several
+            # letters" without checking was wrong on the first real archive
+            # it met: the outlier was a single 9,000-character disciplinary
+            # order.
+            n_close = longest.anchors.get("closing", 0)
+            n_subj = longest.anchors.get("subject", 0)
+            merged = n_close >= 2 or n_subj >= 2
+            print(f"\n!! The longest segment is {lengths[-1]} chars, far above "
+                  f"p95 ({pct(lengths,.95)}).")
+            if merged:
+                print(f"!! It contains {n_close} closing(s) and {n_subj} "
+                      "subject line(s), so it is several letters that never\n"
+                      "!! got split. The closing anchors are missing a form "
+                      "this office uses.")
+            else:
+                print(f"!! It contains {n_close} closing(s) and {n_subj} "
+                      f"subject line(s) and reads as form '{longest.form.value}',\n"
+                      "!! so it is most likely ONE long document rather than "
+                      "a failed split.\n"
+                      "!! Open it and confirm before changing any anchors.")
+
+    print("\ndocument forms")
+    for name, n in forms.most_common():
+        print(f"  {name:12} {n:5d}  {n/total:5.1%}")
+    print("  Orders are not letters: no addressee, no subject line, no "
+          "valediction.\n  They are scored against their own anatomy, not a "
+          "letter's. 'fragment'\n  means neither -- most likely a truncated "
+          "segment.")
     return 0
 
 

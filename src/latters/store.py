@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 #: THE TOKENIZER IS LOAD-BEARING AND THE DEFAULT IS WRONG FOR DEVANAGARI.
 #:
@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS letters (
     trust                 REAL,
     verdict               TEXT,
     opened_by             TEXT,
+    form                  TEXT,
     anchors               TEXT,
     violations            TEXT,
     missing               TEXT,
@@ -116,6 +117,7 @@ class LetterRow:
     trust: float | None = None
     verdict: str | None = None
     opened_by: str | None = None
+    form: str | None = None
     anchors: dict | None = None
     violations: dict | None = None
     missing: list | None = None
@@ -161,12 +163,12 @@ class Store:
                     """INSERT INTO letters
                        (source_file, seq, start_line, end_line, text, text_hash,
                         source_tier, conversion_confidence, completeness, trust,
-                        verdict, opened_by, anchors, violations, missing,
-                        subject, created_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        verdict, opened_by, form, anchors, violations,
+                        missing, subject, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (r.source_file, r.seq, r.start_line, r.end_line, r.text,
                      r.hash(), r.source_tier, r.conversion_confidence,
-                     r.completeness, r.trust, r.verdict, r.opened_by,
+                     r.completeness, r.trust, r.verdict, r.opened_by, r.form,
                      json.dumps(r.anchors or {}, ensure_ascii=False),
                      json.dumps(r.violations or {}, ensure_ascii=False),
                      json.dumps(r.missing or [], ensure_ascii=False),
@@ -221,6 +223,8 @@ class Store:
             "SELECT verdict, COUNT(*) n FROM letters GROUP BY verdict")}
         by_tier = {r["source_tier"]: r["n"] for r in self.db.execute(
             "SELECT source_tier, COUNT(*) n FROM letters GROUP BY source_tier")}
+        by_form = {r["form"] or "?": r["n"] for r in self.db.execute(
+            "SELECT form, COUNT(*) n FROM letters GROUP BY form")}
         return {
             "letters": row["n"],
             "mean_trust": round(row["t"], 4) if row["t"] is not None else None,
@@ -228,4 +232,5 @@ class Store:
             "mean_conversion": round(row["v"], 4) if row["v"] is not None else None,
             "by_verdict": by_verdict,
             "by_source_tier": by_tier,
+            "by_form": by_form,
         }

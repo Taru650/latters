@@ -29,8 +29,73 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 
 from .anchors import ANCHORS, COMPLETENESS_WEIGHTS, Anchor, Role
+
+# --------------------------------------------------------------------------
+# Document form
+# --------------------------------------------------------------------------
+# Not every document in an office archive is a letter, and scoring them all
+# against a letter's anatomy is wrong in a way that matters. Measured on a
+# real district archive: 211 of 589 segments have no addressee at all, and
+# 169 of those scored below 0.7 -- 29% of the corpus marked defective for
+# being the wrong genre.
+#
+# An आदेश (order) is addressed to nobody, carries no विषय line and ends with
+# a signature and a distribution list rather than भवदीय. Those are not
+# missing parts. They are the form.
+
+
+class Form(Enum):
+    #: Addressed to someone: सेवा में / प्रति, विषय, महाशय, भवदीय.
+    LETTER = "letter"
+    #: आदेश, ज्ञापन, अधिसूचना, परिपत्र -- issued, not sent.
+    ORDER = "order"
+    #: No addressee and none of an order's own signals either. Most likely a
+    #: truncated segment, and scored as one.
+    FRAGMENT = "fragment"
+
+
+#: An explicit form marker standing alone on its line.
+_ORDER_MARKER = re.compile(
+    r"^\s*(?:कार्यालय\s*)?(?:आदेश|ज्ञापन|अधिसूचना|परिपत्र|संकल्प|"
+    r"पृष्ठांकन|अनुदेश)\s*[।:\-–]?\s*$", re.M)
+_ADDRESSEE_LINE = re.compile(r"^\s*(?:सेवा\s*में|प्रति|प्रेषिती|To)\s*[,ः:]?\s*$", re.M)
+#: How far into a document a form marker still counts as its heading.
+_MARKER_WINDOW_LINES = 14
+
+
+def detect_form(text: str, anchors: dict[str, int] | None = None) -> Form:
+    """Classify the genre before scoring completeness against it.
+
+    Conservative on purpose. A document with no addressee is only treated as
+    an order if it either says so or behaves like one -- a number, a date and
+    a real body. Otherwise it stays a FRAGMENT and keeps its low score,
+    because the alternative is laundering every truncated segment into
+    "complete" by calling it an order.
+    """
+    if _ADDRESSEE_LINE.search(text):
+        return Form.LETTER
+    head = "\n".join(text.splitlines()[:_MARKER_WINDOW_LINES])
+    if _ORDER_MARKER.search(head):
+        return Form.ORDER
+    a = anchors or {}
+    if a.get("letter_number") and a.get("date") and len(text) >= BODY_TARGET_CHARS:
+        return Form.ORDER
+    return Form.FRAGMENT
+
+
+#: Per-form completeness weights. Each set sums to 1.0 with BODY_WEIGHT.
+FORM_WEIGHTS: dict[Form, dict[str, float]] = {
+    Form.LETTER: dict(COMPLETENESS_WEIGHTS),
+    # An order is identified by its number and date, carries the issuing
+    # office's header, and ends in a distribution list. It has no addressee,
+    # no subject line and no valediction, and must not be docked for them.
+    Form.ORDER: {"letter_number": 0.30, "date": 0.25,
+                 "header": 0.15, "distribution": 0.15},
+    Form.FRAGMENT: dict(COMPLETENESS_WEIGHTS),
+}
 
 #: Completeness is the anchor weights plus a body-length term. They are kept
 #: separate so the anchor weights can be retuned without silently changing
@@ -41,6 +106,8 @@ BODY_WEIGHT = 0.15
 BODY_TARGET_CHARS = 300
 
 assert abs(sum(COMPLETENESS_WEIGHTS.values()) + BODY_WEIGHT - 1.0) < 1e-9
+for _form, _w in FORM_WEIGHTS.items():
+    assert abs(sum(_w.values()) + BODY_WEIGHT - 1.0) < 1e-9, _form
 
 #: Below this many characters a candidate is folded into its neighbour rather
 #: than emitted -- it is a letterhead fragment, not a letter.
@@ -86,18 +153,27 @@ class Segment:
     anchors: dict[str, int] = field(default_factory=dict)
     #: Which rule produced the boundary that opened this segment.
     opened_by: str = "file-start"
+    _form: "Form | None" = None
+
+    @property
+    def form(self) -> "Form":
+        if self._form is None:
+            self._form = detect_form(self.text, self.anchors)
+        return self._form
 
     @property
     def body_chars(self) -> int:
         return len(self.text)
 
     def completeness(self) -> float:
-        score = sum(w for name, w in COMPLETENESS_WEIGHTS.items() if self.anchors.get(name))
+        weights = FORM_WEIGHTS[self.form]
+        score = sum(w for name, w in weights.items() if self.anchors.get(name))
         score += BODY_WEIGHT * min(1.0, self.body_chars / BODY_TARGET_CHARS)
         return round(min(1.0, score), 4)
 
     def missing(self) -> list[str]:
-        return sorted(n for n in COMPLETENESS_WEIGHTS if not self.anchors.get(n))
+        """Parts this document's own form requires and does not have."""
+        return sorted(n for n in FORM_WEIGHTS[self.form] if not self.anchors.get(n))
 
 
 def tag_lines(text: str, anchors: list[Anchor] = ANCHORS) -> list[TaggedLine]:
