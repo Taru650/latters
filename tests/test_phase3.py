@@ -5,9 +5,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from latters.classify import (DEFAULT_LETTER_TYPE, NaiveBayes, UNLABELLED,
-                              bootstrap, cross_validate, department_features,
-                              fold_rare, letter_type_features, ngrams)
+from latters.classify import (DEFAULT_LETTER_TYPE, NaiveBayes, TrainedClassifier,
+                              UNLABELLED, bootstrap, coverage_gap,
+                              cross_validate, department_features, fold_rare,
+                              letter_type_features, ngrams)
 from latters.fields import State, extract, normalise_date
 from latters.template import canonical, mine, mine_all
 
@@ -256,3 +257,83 @@ def test_skeleton_renders_something_a_clerk_can_read():
     assert "## above the subject line" in r and "## below the body" in r
     assert "body: write roughly" in r
     assert r.index("## above the subject line") < r.index("## below the body")
+
+
+# --- the confidence gate that never gated anything ------------------------
+def _realistic() -> NaiveBayes:
+    """Letters long enough to saturate a plain softmax. Two hundred features
+    of shared office boilerplate is what a real letter looks like, and it is
+    what made the old confidence constant."""
+    boiler = ("कार्यालय जिला पदाधिकारी सारण छपरा सेवा में महाशय उपर्युक्त "
+              "विषय के प्रसंग में कहना है कि आवश्यक कार्यवाही सुनिश्चित "
+              "करते हुए प्रतिवेदन इस कार्यालय को उपलब्ध कराएँ विश्वासभाजन ")
+    X = [boiler + "भूमि दाखिल खारिज अंचल राजस्व वाद"] * 8 + \
+        [boiler + "वेतन देयक भुगतान स्थापना सेवांत लाभ"] * 8
+    return NaiveBayes(min_df=1).fit(X, ["राजस्व"] * 8 + ["स्थापना"] * 8)
+
+
+def test_confidence_is_not_pinned_to_one():
+    """The bug this replaced: `scores()` sums hundreds of log-probabilities,
+    so exp(runner_up - top) underflowed and every prediction came back at
+    exactly 1.0. Measured on a real corpus, 445 of 445 letters did -- while
+    three documents claimed the department was applied behind a gate."""
+    m = _realistic()
+    label, conf = m.predict("कार्यालय जिला पदाधिकारी भूमि दाखिल खारिज वाद")
+    assert label == "राजस्व"
+    assert conf < 0.9999, "confidence saturated again; the gate is dead"
+
+
+def test_normalising_does_not_change_what_is_predicted():
+    """Every class is divided by the same positive constant, so the argmax --
+    and therefore the accuracy -- must be identical. Only the margin moves."""
+    m = _realistic()
+    for text, want in (("भूमि दाखिल खारिज अंचल", "राजस्व"),
+                       ("वेतन देयक भुगतान सेवांत", "स्थापना")):
+        assert m.predict(text)[0] == want
+        assert m.predict(text)[0] == max(m.scores(text), key=m.scores(text).get)
+
+
+def test_a_letter_type_gate_would_delete_the_skeleton_lookup():
+    """13 classes spread the margin so thin that a 0.30 gate left 2 requests
+    of 406. A non-zero threshold here does not make the suggestion safer --
+    it returns None, and every letter silently loses its letterhead."""
+    assert TrainedClassifier.letter_type_threshold == 0.0
+    # The real protection is this, not a margin: the type is always shown as
+    # a guess for the user to confirm.
+    assert TrainedClassifier().letter_type_confident is False
+
+
+def test_the_department_gate_is_low_enough_to_leave_a_prediction():
+    """0.35 was swept out-of-fold: it keeps 394/431 at 0.982 accuracy. A gate
+    tuned upward past ~0.40 starts costing more filters than it saves."""
+    assert 0.30 <= TrainedClassifier.department_threshold <= 0.40
+
+
+# --- the classes that get dropped -----------------------------------------
+def test_coverage_gap_names_the_departments_that_cannot_be_predicted():
+    """The old report showed 'अन्य' as a 5th class with F1 0.22. That class
+    is a union of unrelated departments, it cannot be learned, and the
+    shipped classifier never emits it -- `fit` drops those rows."""
+    labels = ["राजस्व"] * 287 + ["विकास"] * 86 + ["निर्वाचन"] * 3 + ["विधि"] * 3
+    gap = coverage_gap(labels)
+    assert set(gap.folded) == {"निर्वाचन", "विधि"}
+    assert gap.n_letters == 6
+    assert 0.01 < gap.share < 0.02
+    text = gap.render()
+    assert "निर्वाचन" in text and "विधि" in text
+    # it must say the margin cannot catch these -- that was measured, 14/14
+    assert "cannot detect" in text
+
+
+def test_no_gap_reported_when_every_class_has_support():
+    assert coverage_gap(["a"] * 20 + ["b"] * 20).render() == ""
+
+
+def test_the_shipped_classifier_never_emits_the_rare_bucket():
+    rows = [("भूमि दाखिल खारिज अंचल राजस्व", "राजस्व", None)] * 20 + \
+           [("वेतन देयक भुगतान स्थापना", "स्थापना", None)] * 20 + \
+           [("मतदाता सूची निर्वाचन आयोग", "निर्वाचन", None)] * 3
+    clf = TrainedClassifier.fit(rows)
+    assert clf.department is not None
+    assert "अन्य" not in clf.department.classes
+    assert "निर्वाचन" not in clf.department.classes

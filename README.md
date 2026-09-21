@@ -303,8 +303,20 @@ letter missing one is a defect, and collapsing them loses both.
 
 | | accuracy | baseline | lift | macro F1 | verdict |
 |---|---:|---:|---:|---:|---|
-| department | 0.942 | 0.645 | +0.297 | **0.787** | apply with a confidence gate |
-| letter type | 0.662 | 0.218 | +0.444 | 0.672 | **suggest only, user confirms** |
+| department | 0.968 | 0.666 | +0.302 | **0.934** | apply behind the 0.35 gate |
+| letter type | 0.660 | 0.229 | +0.431 | 0.671 | **suggest only, user confirms** |
+
+Measured on the **4-class model that actually ships**. The earlier 0.787 was
+cross-validated on a 5th `अन्य` class that `TrainedClassifier.fit` drops, so
+it scored a model nobody runs and understated the real one by 0.147.
+
+**14 letters (3%) are in departments the classifier cannot predict at all** —
+निर्वाचन, पंचायती राज, विधि, मनरेगा, सामान्य, each under the 10-letter support
+floor. Their stored labels are exact (the branch code gives them), so search
+and retrieval are unaffected; a free-text *request* from one of those gets
+assigned a trained class instead, and on this corpus that was wrong 14 times
+out of 14. `latters classify` prints this as a warning rather than averaging
+it into a score.
 
 From the clean rebuild; `docs/REBUILD.md` is the current record of every
 measured number and of which ones moved.

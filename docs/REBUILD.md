@@ -103,30 +103,44 @@ dispatched drafts make the median meaningful.
 ## Classification
 
 ```
-DEPARTMENT   445/455 labelled (98%)   n=445  classes=5
-  accuracy          0.942
-  majority baseline 0.645  (always predict 'राजस्व')
-  macro F1          0.787
+DEPARTMENT   445/455 labelled (98%)   n=431  classes=4
+  accuracy          0.968
+  majority baseline 0.666  (always predict 'राजस्व')
+  macro F1          0.934
 
-  राजस्व      287   0.97 / 1.00 / 0.98
-  विकास        86   0.91 / 0.87 / 0.89
-  बैंकिंग      38   0.84 / 1.00 / 0.92
-  स्थापना      20   0.95 / 0.90 / 0.92
-  अन्य         14   0.50 / 0.14 / 0.22
+  राजस्व      287   0.98 / 1.00 / 0.99
+  विकास        86   0.97 / 0.87 / 0.92
+  बैंकिंग      38   0.90 / 1.00 / 0.95
+  स्थापना      20   0.86 / 0.90 / 0.88
 
-LETTER TYPE  426/455 labelled (94%)   n=426  classes=13
-  accuracy          0.662
-  majority baseline 0.218  (always predict 'सामान्य पत्राचार')
-  macro F1          0.672
+  !! 14 letters (3%) in departments the classifier cannot predict:
+  !!   निर्वाचन, पंचायती राज, मनरेगा, विधि, सामान्य
+
+LETTER TYPE  426/455 labelled (94%)   n=406  classes=12
+  accuracy          0.660
+  majority baseline 0.229  (always predict 'सामान्य पत्राचार')
+  macro F1          0.671
 ```
 
-Department is usable behind a confidence gate. Letter type is not, and
+These supersede the figures first published for this rebuild (department
+0.787, letter type 0.672). Those cross-validated a 5-class model including
+`अन्य` — a class `TrainedClassifier.fit` **drops**, so the number described
+a model nobody runs and understated the shipped one by 0.147. The `अन्य`
+row's F1 of 0.22 was not a finding about the classifier; it was a union of
+five unrelated departments being averaged into a score.
+
+Department is usable behind the 0.35 gate. Letter type is not, and
 `letter_type_confident = False` stays hard-coded.
 
-The `अन्य` row is the interesting failure: F1 0.22 on 14 examples, recall
-0.14. "Other" is being predicted almost never, which means it is acting as a
-dumping ground in the bootstrapped labels rather than as a class. That is a
-labelling artefact, not a model problem, and no amount of tuning fixes it.
+The 3% coverage gap is the real cost, and it is a draft-time cost only. The
+stored labels for those 14 letters are exact, because the branch code gives
+them — search and retrieval over the archive are unaffected. A free-text
+*request* from one of those departments gets assigned one of the four
+trained classes, and on this corpus that happened **14 times out of 14, every
+one at the old "confidence" of 1.00**. The fix is more letters in those
+departments, or the drafter setting the department by hand. It is not a
+threshold: see `docs/MAINTENANCE.md` for the two calibrations that were
+tried and measured not to separate.
 
 ## Skeletons
 

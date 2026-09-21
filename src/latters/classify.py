@@ -172,6 +172,74 @@ def fold_rare(labels: list[str], *, min_support: int = MIN_SUPPORT,
     return [rare if y in folded else y for y in labels], folded
 
 
+@dataclass(frozen=True)
+class CoverageGap:
+    """The classes the shipped classifier cannot predict, and who pays.
+
+    `fold_rare` merges classes under `min_support` into a single 'other'
+    bucket. That is right for *reporting* -- macro-F1 over classes with three
+    examples is noise -- but it produced two quieter problems that were live
+    in this project for four phases:
+
+    1. **The reported model was not the shipped model.** `cross_validate` was
+       run on the folded labels, so 'अन्य' appeared as a 5th class scoring
+       F1 0.22, while `TrainedClassifier.fit` *drops* those rows and ships a
+       4-class model. The published macro-F1 of 0.787 understated the model
+       that actually runs by 0.147 (it scores 0.934), and the 0.22 row
+       described a class the shipped classifier cannot emit.
+
+    2. **Nobody said what happens to those letters.** They are not edge
+       cases in the data -- they are whole departments. Measured on the real
+       corpus, all 14 letters from निर्वाचन, पंचायती राज, विधि, मनरेगा and
+       सामान्य were classified as one of the four big departments, **14 out
+       of 14 wrong**. Their stored labels are correct (the branch code is
+       exact), so retrieval over the archive is fine; the damage is at draft
+       time, where a request from one of those departments silently filters
+       retrieval to the wrong department's letters.
+
+    Folding is still the right call -- one more example of निर्वाचन does not
+    make it learnable -- but the gap has to be stated, not averaged away.
+    """
+
+    folded: tuple[str, ...]
+    n_letters: int
+    n_total: int
+
+    @property
+    def share(self) -> float:
+        return self.n_letters / self.n_total if self.n_total else 0.0
+
+    def render(self) -> str:
+        if not self.folded:
+            return ""
+        return (
+            f"!! {self.n_letters} letter(s) ({self.share:.0%}) are in "
+            f"departments the classifier cannot predict:\n"
+            f"!!   {', '.join(sorted(self.folded))}\n"
+            f"!! Their stored labels are correct -- the branch code is exact "
+            f"-- so\n"
+            f"!! search and retrieval over the archive are unaffected. But a "
+            f"free-text\n"
+            f"!! REQUEST from one of these will be assigned one of the "
+            f"trained classes,\n"
+            f"!! and the confidence margin cannot detect it: measured on this "
+            f"corpus,\n"
+            f"!! every such letter was misclassified. Set the department by "
+            f"hand for\n"
+            f"!! these, or collect {MIN_SUPPORT}+ letters each and re-run."
+        )
+
+
+def coverage_gap(labels: list[str], *, min_support: int = MIN_SUPPORT
+                 ) -> CoverageGap:
+    """Which classes get dropped, and how many letters that is."""
+    counts = Counter(labels)
+    folded = tuple(y for y, n in counts.items() if n < min_support)
+    return CoverageGap(folded=folded,
+                       n_letters=sum(counts[y] for y in folded),
+                       n_total=len(labels))
+
+
 # --------------------------------------------------------------------------
 # Featurisers
 # --------------------------------------------------------------------------
@@ -268,13 +336,47 @@ class NaiveBayes:
         return out
 
     def predict(self, text: str) -> tuple[str, float]:
-        """Returns (label, confidence), confidence being the softmax margin."""
+        """Returns (label, confidence).
+
+        THE CONFIDENCE IS LENGTH-NORMALISED AND THAT IS NOT COSMETIC.
+
+        `scores()` sums `n * log P(feature|class)` over every in-vocabulary
+        n-gram, so a 400-word letter accumulates hundreds of log-probabilities
+        and the winning class beats the runner-up by hundreds of nats. A plain
+        softmax over those underflows: `exp(runner_up - top)` is 0.0 and the
+        confidence is exactly 1.0. Measured on a real corpus, **445 of 445
+        letters came back at 1.0000** and the 0.40 gate they were supposed to
+        pass had never rejected anything in the project's history, while three
+        documents claimed the department was "applied with a confidence gate".
+
+        Dividing by the total feature weight turns the score into a mean
+        log-probability per feature. Every class is divided by the same
+        positive constant, so **the argmax and therefore the accuracy are
+        unchanged**; only the margin becomes readable. Out-of-fold on 431
+        letters the result separates errors properly:
+
+            confidence 0.25-0.35    n=37    accuracy 0.757
+            confidence 0.35-0.40    n=113   accuracy 0.982
+            confidence 0.40+        n=281   accuracy 0.981
+
+        **What it does NOT do is detect a department the model was never
+        trained on.** A softmax margin is relative to a closed class set and
+        cannot express "none of the above"; an absolute per-feature likelihood
+        was tried too and separated no better (out-of-domain letters scored
+        *higher*, -7.21 against -7.30, because these are all letters from one
+        office and the n-grams are dominated by shared boilerplate -- the
+        department lives in the branch code, which a free-text request has
+        none of). See `coverage_gap()`.
+        """
         s = self.scores(text)
         if not s:
             return UNLABELLED, 0.0
-        best = max(s, key=s.get)
-        top = s[best]
-        z = sum(math.exp(v - top) for v in s.values())
+        g = ngrams(text, self.lo, self.hi)
+        weight = sum(n for f, n in g.items() if f in self.vocab) or 1
+        scaled = {y: v / weight for y, v in s.items()}
+        best = max(scaled, key=scaled.get)
+        top = scaled[best]
+        z = sum(math.exp(v - top) for v in scaled.values())
         return best, 1.0 / z
 
 
@@ -395,10 +497,27 @@ class TrainedClassifier:
     """
     department: NaiveBayes | None = None
     letter_type: NaiveBayes | None = None
-    #: Below this softmax margin the prediction is not acted on. Department's
-    #: gate is lower because its measured accuracy is much higher.
-    department_threshold: float = 0.40
-    letter_type_threshold: float = 0.55
+    #: Below this margin the prediction is not acted on. Both numbers are
+    #: swept out-of-fold on a real 455-letter corpus, not chosen by feel --
+    #: the previous 0.40/0.55 pair was invented and, against the saturated
+    #: softmax they were written for, rejected exactly nothing.
+    #:
+    #: DEPARTMENT, 5 classes, overall accuracy 0.963:
+    #:     gate 0.33  keeps 409/431  accuracy 0.980   8/16 errors caught
+    #:     gate 0.35  keeps 394/431  accuracy 0.982   9/16 errors caught
+    #:     gate 0.38  keeps 346/431  accuracy 0.983  10/16 errors caught
+    #: 0.35 buys +0.019 accuracy for 9% of requests losing their filter;
+    #: 0.38 costs another 11% of requests for one more error.
+    department_threshold: float = 0.35
+
+    #: LETTER TYPE is 13 classes, so the margin is spread thin and **a gate
+    #: is the wrong instrument entirely**: at 0.30, two requests out of 406
+    #: survive. A non-zero value here does not make the suggestion safer, it
+    #: deletes it -- and with it the (department, type) skeleton lookup, so
+    #: every letter silently loses its letterhead. `letter_type_confident`
+    #: below is the real protection: the type is always presented as a guess
+    #: for the user to confirm, never acted on silently.
+    letter_type_threshold: float = 0.0
 
     @classmethod
     def fit(cls, rows: list[tuple[str, str | None, str | None]], *,

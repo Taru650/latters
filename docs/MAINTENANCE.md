@@ -67,9 +67,11 @@ where they differ.
   mean trust 0.925; 446 indexed, 9 for review, 0 quarantined.
 - Retrieval: tfidf + department filter, same-cell P@5 **0.465 ± 0.028**
   degraded, against a 0.062 random baseline. Known-item recall@5 0.943.
-- Classification: department macro-F1 **0.787** (usable, accuracy 0.942 over
-  a 0.645 majority); letter type **0.672** (suggest-only, and the code
-  hard-codes `letter_type_confident = False`).
+- Classification: department macro-F1 **0.934** (accuracy 0.968 over a 0.666
+  majority) on the 4-class model that ships; letter type **0.671**
+  (suggest-only, and the code hard-codes `letter_type_confident = False`).
+  **3% of letters are in departments it cannot predict** — see the coverage
+  gap below.
 - Templates: the बैंकिंग/जाँच skeleton supplies 88% of a letter.
 - DOCX and PDF export verified end to end over HTTP.
 
@@ -98,6 +100,37 @@ negotiated down when the number comes in high.
 Watch `abandoned` alongside the median. A low median over three exports out
 of ninety drafts means people are generating, giving up, and typing the
 letter by hand — which reads as success in the median alone.
+
+## The confidence gate, and what it cannot do
+
+`NaiveBayes.predict` length-normalises before the softmax. Without it the
+score is a sum of hundreds of log-probabilities, the runner-up underflows,
+and **every prediction comes back at exactly 1.0** — which it did, 445 out of
+445, for four phases, while three documents said the department was applied
+behind a gate. Normalising divides every class by the same constant, so
+accuracy is untouched and only the margin becomes readable.
+
+Both thresholds are swept out-of-fold, not chosen by feel:
+
+- `department_threshold = 0.35` — keeps 394/431 at 0.982 accuracy, catching
+  9 of 16 errors. Raising it to 0.38 costs another 11% of requests their
+  filter to catch one more.
+- `letter_type_threshold = 0.0` — **deliberately no gate.** With 13 classes a
+  0.30 gate left 2 requests out of 406. A non-zero value here does not make
+  the suggestion safer; it returns None and every letter silently loses its
+  skeleton, and with it the letterhead.
+
+**The margin cannot detect a department the model was never trained on.** A
+softmax margin is relative to a closed class set and cannot say "none of the
+above". An absolute per-feature likelihood was tried and separated no better
+— out-of-domain letters scored *higher* (-7.21 vs -7.30), because these are
+all letters from one office and the n-grams are dominated by shared
+boilerplate. The department lives in the branch code, and a free-text request
+has none.
+
+So `latters classify` prints a coverage warning naming the departments below
+the support floor. The fix is more letters in those departments, or the user
+setting the department by hand. It is not a threshold.
 
 ## Adding a font mapping
 

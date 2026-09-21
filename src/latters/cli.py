@@ -522,8 +522,9 @@ def cmd_classify(args: argparse.Namespace) -> int:
     if _require_db(args.db) is None:
         return 2
 
-    from .classify import (UNLABELLED, cross_validate, department_features,
-                           fold_rare, letter_type_features)
+    from .classify import (RARE_LABEL, UNLABELLED, coverage_gap,
+                           cross_validate, department_features, fold_rare,
+                           letter_type_features)
     from .store import Store
 
     rows = _labelled_rows(args.db)
@@ -545,11 +546,27 @@ def cmd_classify(args: argparse.Namespace) -> int:
         if len(set(y)) < 2:
             print("   only one class present -- nothing to learn or evaluate")
             continue
+        # Evaluate THE MODEL THAT SHIPS. TrainedClassifier.fit drops the
+        # rare rows; cross-validating on the folded labels instead scored a
+        # phantom 5-class model, reported an F1 for a class the shipped
+        # classifier cannot emit, and understated the real macro-F1 by 0.147.
         folded, dropped = fold_rare(y, min_support=args.min_support)
-        if dropped:
-            print(f"   folded into 'अन्य' (under {args.min_support} examples): "
-                  f"{', '.join(sorted(dropped))}")
-        print(cross_validate(X, folded, k=args.folds).render())
+        keep = [i for i, label in enumerate(folded) if label != RARE_LABEL]
+        if len({folded[i] for i in keep}) < 2:
+            print("   too few classes above the support floor to evaluate")
+            continue
+        print(cross_validate([X[i] for i in keep], [folded[i] for i in keep],
+                             k=args.folds).render())
+
+        # The dropped rows are not an evaluation detail -- they are whole
+        # departments whose requests will be silently misfiled.
+        gap = coverage_gap(y, min_support=args.min_support)
+        if gap.folded:
+            print()
+            print(gap.render() if attr == "department" else
+                  f"!! {gap.n_letters} letter(s) ({gap.share:.0%}) are in "
+                  f"types the classifier cannot predict:\n"
+                  f"!!   {', '.join(sorted(gap.folded))}")
 
     if args.write:
         with Store(args.db) as store:
