@@ -4,13 +4,14 @@ Fully offline. No cloud API, no telemetry, nothing leaves the machine.
 
 Target hardware and the full phase plan: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
-**Status: Phase 0 measured, Phases 1-5 (conversion, segmentation,
-classification, retrieval, generation) implemented and validated against a real district archive** — see
+**Status: Phase 0 measured, Phases 1-6 (conversion, segmentation,
+classification, retrieval, generation, web app) implemented and validated against a real district archive** — see
 [`docs/PHASE0_FINDINGS.md`](docs/PHASE0_FINDINGS.md) and
 [`docs/PHASE2_FINDINGS.md`](docs/PHASE2_FINDINGS.md) and
 [`docs/PHASE3_FINDINGS.md`](docs/PHASE3_FINDINGS.md) and
 [`docs/PHASE4_FINDINGS.md`](docs/PHASE4_FINDINGS.md) and
-[`docs/PHASE5_FINDINGS.md`](docs/PHASE5_FINDINGS.md).
+[`docs/PHASE5_FINDINGS.md`](docs/PHASE5_FINDINGS.md) and
+[`docs/PHASE6_FINDINGS.md`](docs/PHASE6_FINDINGS.md).
 
 ---
 
@@ -84,6 +85,7 @@ latters ingest /path/to/archive --repair --rescue-latin -o ./converted
 | `encoders.py` | Optional dense encoders (not on the default path — see below) |
 | `llm.py` | Ollama client, defaults traced to the Phase 0 measurements |
 | `draft.py` | Prompt budgeting, output sanitising, skeleton assembly |
+| `web/` | FastAPI drafting and admin pages — no framework, no CDN |
 | `cli.py` | `inventory`, `ingest`, `fonts convert/gold/tables` |
 
 ### The three things that make this non-trivial
@@ -473,4 +475,47 @@ whether the drafts are worth using.
 
 ```bash
 python -m pytest tests/ -q      # 241 tests
+```
+
+
+---
+
+## Phase 6 — the web pages
+
+```bash
+pip install -e ".[web]"
+latters serve --db corpus.db --skeletons skeletons --model gemma3:1b
+latters serve --db corpus.db --stub          # everything except the model
+```
+
+| page | does |
+|---|---|
+| `/` | describe the letter → draft → edit → export DOCX/PDF/TXT |
+| `/admin` | upload, browse lowest-trust-first, correct in place, delete, edit skeletons |
+
+**No framework, no build step, no CDN.** The office machine has no internet,
+so a `<script src="https://...">` tag is a page that renders and then does
+nothing when clicked. FastAPI serves HTML; ~260 lines of plain JavaScript do
+the rest. A test asserts no template references an external URL.
+
+**Every draft shows its provenance** — the letters it was built from with
+trust scores, what was stripped from the model's output, and any number the
+model invented. Those are fields in the response schema with tests asserting
+they are present, because a UI that renders the letter and hides them would
+undo the whole Phase 5 design.
+
+### Four bugs found by running it, with 306 unit tests passing
+
+| bug | symptom |
+|---|---|
+| Starlette flipped `TemplateResponse`'s signature | `TypeError: unhashable type: 'dict'` from inside Jinja |
+| SQLite connections are thread-bound | first browser draft raised `ProgrammingError` |
+| DOCX declared `styles.xml` and never shipped it | Word tolerated it since Phase 4; LibreOffice refuses the package |
+| no labels in a browser-built corpus | `classify --write` has no web equivalent, so drafts lost their filter and skeleton |
+
+Loopback by default: there is no authentication and the corpus is official
+correspondence.
+
+```bash
+python -m pytest tests/ -q      # 333 tests
 ```

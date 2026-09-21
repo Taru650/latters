@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% set page = 'draft' %}
+{% block body %}
+<section class="pane">
+  <h1>नया पत्र</h1>
+  <label>आपको किस बारे में पत्र चाहिए?
+    <textarea id="request" rows="4" placeholder="जैसे: अंचल अधिकारी से दाखिल-खारिज में विलंब पर प्रतिवेदन मांगना है"></textarea>
+  </label>
+  <div class="row">
+    <label>विभाग
+      <select id="department"><option value="">(स्वतः पहचानें)</option>
+        {% for d in departments %}<option>{{ d }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>पत्र का प्रकार
+      <select id="letter_type"><option value="">(स्वतः पहचानें)</option>
+        {% for t in letter_types %}<option>{{ t }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="row">
+    <label>विषय <input id="subject" placeholder="विषय पंक्ति"></label>
+    <label>पत्रांक <input id="letter_number" placeholder="खाली छोड़ें तो रिक्त स्थान रहेगा"></label>
+  </div>
+  <button id="go" class="primary">प्रारूप तैयार करें</button>
+  <p id="status" class="status"></p>
+</section>
+
+<section class="pane" id="result" hidden>
+  <div id="banner"></div>
+  <h2>प्रारूप <small class="en">— editable</small></h2>
+  <textarea id="letter" rows="22" spellcheck="false"></textarea>
+  <div class="row">
+    <button data-export="docx">DOCX</button>
+    <button data-export="pdf">PDF</button>
+    <button data-export="txt">TXT</button>
+    <span id="timing" class="meta"></span>
+  </div>
+</section>
+
+<section class="pane" id="evidence" hidden>
+  <h2>यह प्रारूप किन पत्रों से बना है <small class="en">— check these</small></h2>
+  <ul id="sources" class="sources"></ul>
+  <div id="notes"></div>
+</section>
+{% endblock %}

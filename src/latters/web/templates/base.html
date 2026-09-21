@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}पत्र सहायक{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <strong>पत्र सहायक</strong>
+  <nav>
+    <a href="/" {% if page == 'draft' %}class="on"{% endif %}>पत्र तैयार करें</a>
+    <a href="/admin" {% if page == 'admin' %}class="on"{% endif %}>संग्रह प्रबंधन</a>
+  </nav>
+  <span class="meta">{{ stats.letters }} पत्र &middot; {{ model }}</span>
+</header>
+<main>{% block body %}{% endblock %}</main>
+<footer>
+  यह सहायक केवल प्रारूप तैयार करता है। भेजने से पहले पूरा पत्र पढ़ें और आवश्यक सुधार करें।
+  <span class="en">This assistant only drafts. Read and correct every letter before it is dispatched.</span>
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

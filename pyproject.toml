@@ -15,10 +15,15 @@ requires-python = ">=3.10"
 dependencies = ["numpy>=1.21"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+# httpx2 is what starlette.testclient needs to drive the web app.
+dev = ["pytest>=7", "httpx2"]
 # Only for the optional dense-encoder path, which Phase 4 measured as not
 # worth adopting. Install these only to re-run that decision yourself.
 dense = ["onnxruntime>=1.16", "tokenizers>=0.15"]
+# The drafting and admin pages. Server-rendered HTML and plain JavaScript --
+# no Node toolchain, no bundle, and no CDN, because the office machine has
+# no internet and only ~3 GB of RAM the model is not already using.
+web = ["fastapi>=0.110", "uvicorn>=0.27", "jinja2>=3.1", "python-multipart>=0.0.9"]
 
 [project.scripts]
 latters = "latters.cli:main"
@@ -31,4 +36,5 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-latters = ["data/fonts/*.tsv", "data/gold/*.tsv"]
+latters = ["data/fonts/*.tsv", "data/gold/*.tsv",
+           "web/templates/*.html", "web/static/*"]

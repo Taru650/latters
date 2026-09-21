@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -130,12 +131,30 @@ class LetterRow:
 
 
 class Store:
+    """
+    Thread safety
+    -------------
+    The web application runs conversion, segmentation and generation in
+    worker threads so a long upload cannot freeze the page someone else is
+    drafting on. sqlite3 refuses cross-thread use of a connection by
+    default, which surfaced as ProgrammingError the first time a draft was
+    requested through the browser.
+
+    `check_same_thread=False` is safe here because CPython links SQLite in
+    serialized mode (``sqlite3.threadsafety == 3``), so the library
+    serialises access internally. Writes additionally take a lock: SQLite
+    permits one writer at a time, and without the lock a concurrent upload
+    and correction produce "database is locked" rather than waiting.
+    """
+
     def __init__(self, path: Path | str = ":memory:"):
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path)
+        self.db = sqlite3.connect(self.path, check_same_thread=False,
+                                  timeout=30.0)
         self.db.row_factory = sqlite3.Row
+        self._write_lock = threading.RLock()
         self.db.executescript(_SCHEMA)
         self.db.execute(
             "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
@@ -157,36 +176,47 @@ class Store:
         """Insert letters. Returns (inserted, skipped_as_duplicate)."""
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         inserted = skipped = 0
-        for r in rows:
-            try:
-                self.db.execute(
-                    """INSERT INTO letters
-                       (source_file, seq, start_line, end_line, text, text_hash,
-                        source_tier, conversion_confidence, completeness, trust,
-                        verdict, opened_by, form, anchors, violations,
-                        missing, subject, created_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (r.source_file, r.seq, r.start_line, r.end_line, r.text,
-                     r.hash(), r.source_tier, r.conversion_confidence,
-                     r.completeness, r.trust, r.verdict, r.opened_by, r.form,
-                     json.dumps(r.anchors or {}, ensure_ascii=False),
-                     json.dumps(r.violations or {}, ensure_ascii=False),
-                     json.dumps(r.missing or [], ensure_ascii=False),
-                     r.subject, now))
-                inserted += 1
-            except sqlite3.IntegrityError:
-                skipped += 1
-        self.db.commit()
+        with self._write_lock:
+          for r in rows:
+              try:
+                  self.db.execute(
+                      """INSERT INTO letters
+                         (source_file, seq, start_line, end_line, text, text_hash,
+                          source_tier, conversion_confidence, completeness, trust,
+                          verdict, opened_by, form, anchors, violations,
+                          missing, subject, created_at)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      (r.source_file, r.seq, r.start_line, r.end_line, r.text,
+                       r.hash(), r.source_tier, r.conversion_confidence,
+                       r.completeness, r.trust, r.verdict, r.opened_by, r.form,
+                       json.dumps(r.anchors or {}, ensure_ascii=False),
+                       json.dumps(r.violations or {}, ensure_ascii=False),
+                       json.dumps(r.missing or [], ensure_ascii=False),
+                       r.subject, now))
+                  inserted += 1
+              except sqlite3.IntegrityError:
+                  skipped += 1
+          self.db.commit()
         return inserted, skipped
 
     def delete(self, letter_id: int) -> bool:
-        cur = self.db.execute("DELETE FROM letters WHERE id = ?", (letter_id,))
-        self.db.commit()
+        with self._write_lock:
+            cur = self.db.execute("DELETE FROM letters WHERE id = ?", (letter_id,))
+            self.db.commit()
         return cur.rowcount > 0
 
     def delete_source(self, source_file: str) -> int:
-        cur = self.db.execute("DELETE FROM letters WHERE source_file = ?", (source_file,))
-        self.db.commit()
+        with self._write_lock:
+            cur = self.db.execute("DELETE FROM letters WHERE source_file = ?",
+                                  (source_file,))
+            self.db.commit()
+        return cur.rowcount
+
+    def write(self, sql: str, params: tuple = ()) -> int:
+        """Run a statement that changes rows, under the write lock."""
+        with self._write_lock:
+            cur = self.db.execute(sql, params)
+            self.db.commit()
         return cur.rowcount
 
     # --- reading ----------------------------------------------------------

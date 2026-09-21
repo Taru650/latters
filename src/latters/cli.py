@@ -24,6 +24,7 @@
     latters eval --db X.db               measure retrieval against baselines
 
     latters draft REQUEST --db X.db      draft a letter from the archive
+    latters serve --db X.db              the drafting and admin web pages
 """
 
 from __future__ import annotations
@@ -798,6 +799,31 @@ def cmd_draft(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+def cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+    except ImportError:
+        print("the web pages need the optional extras:\n"
+              "  pip install -e \".[web]\"", file=sys.stderr)
+        return 2
+    from .web.app import create_app
+
+    app = create_app(db=args.db, skeletons=args.skeletons, model=args.model,
+                     host=args.ollama, stub=args.stub, exports=args.exports)
+    print(f"  drafting page   http://{args.bind}:{args.port}/")
+    print(f"  admin page      http://{args.bind}:{args.port}/admin")
+    print(f"  corpus          {args.db}")
+    print(f"  model           {'stub (no LLM)' if args.stub else args.model}")
+    if args.bind not in ("127.0.0.1", "localhost"):
+        print("\n!! Bound to a non-loopback address. This application has no\n"
+              "!! authentication and the corpus is official correspondence.\n"
+              "!! Only do this on a trusted office LAN.", file=sys.stderr)
+    print("\nCtrl-C to stop.")
+    uvicorn.run(app, host=args.bind, port=args.port, log_level=args.log_level)
+    return 0
+
+
+# --------------------------------------------------------------------------
 def cmd_inventory(args: argparse.Namespace) -> int:
     if _require_dir(args.path) is None:
         return 2
@@ -1089,6 +1115,20 @@ def build_parser() -> argparse.ArgumentParser:
                     "उपर्युक्त विषय के प्रसंग में कहना है कि आवश्यक कार्यवाही "
                     "सुनिश्चित करते हुए प्रतिवेदन इस कार्यालय को उपलब्ध कराएँ।")
     dr.set_defaults(func=cmd_draft)
+
+    sv = sub.add_parser("serve", help="run the drafting and admin web pages")
+    sv.add_argument("--db", required=True)
+    sv.add_argument("--skeletons", default="skeletons")
+    sv.add_argument("--exports", default="exports")
+    sv.add_argument("--model", default="gemma3:1b")
+    sv.add_argument("--ollama", default="http://127.0.0.1:11434")
+    sv.add_argument("--bind", default="127.0.0.1",
+                    help="loopback by default: there is no authentication")
+    sv.add_argument("--port", type=int, default=8765)
+    sv.add_argument("--log-level", default="warning")
+    sv.add_argument("--stub", action="store_true",
+                    help="serve without an LLM; everything else works")
+    sv.set_defaults(func=cmd_serve)
 
     inv = sub.add_parser("inventory", help="Phase 1.1 archive triage")
     inv.add_argument("path"); inv.add_argument("--json", action="store_true")

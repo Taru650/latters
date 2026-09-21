@@ -1,0 +1,67 @@
+/* Devanagari first. Nirmala UI ships with Windows and shapes conjuncts
+   correctly; Mangal is the fallback on older installs. A generic sans-serif
+   renders matras wrongly on some systems, which in this application looks
+   exactly like a conversion bug and wastes someone's afternoon. */
+:root {
+  --ink: #16202b; --muted: #5b6b7c; --line: #d7dee6; --bg: #f6f8fa;
+  --ok: #1a7f45; --warn: #9a6400; --bad: #b3261e; --accent: #16456b;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: "Nirmala UI", Mangal, "Noto Sans Devanagari", system-ui, sans-serif;
+  font-size: 16px; line-height: 1.55;
+}
+header {
+  display: flex; gap: 1.25rem; align-items: center; padding: .7rem 1.25rem;
+  background: #fff; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
+}
+header strong { font-size: 1.05rem; }
+header nav { display: flex; gap: .9rem; }
+header a { color: var(--accent); text-decoration: none; padding: .2rem .1rem; }
+header a.on { border-bottom: 2px solid var(--accent); font-weight: 600; }
+header .meta { margin-left: auto; }
+main { max-width: 1020px; margin: 0 auto; padding: 1.25rem; }
+.pane {
+  background: #fff; border: 1px solid var(--line); border-radius: 8px;
+  padding: 1.1rem 1.25rem; margin-bottom: 1.1rem;
+}
+h1 { font-size: 1.2rem; margin: 0 0 .9rem; }
+h2 { font-size: 1.05rem; margin: 0 0 .7rem; }
+small.en, .en { color: var(--muted); font-weight: 400; font-size: .85em; }
+.meta, .status { color: var(--muted); font-size: .88rem; }
+label { display: block; margin-bottom: .75rem; font-size: .92rem; }
+.row { display: flex; gap: .9rem; flex-wrap: wrap; align-items: flex-end; }
+.row > label { flex: 1 1 200px; }
+textarea, input, select {
+  width: 100%; margin-top: .3rem; padding: .5rem .6rem; font: inherit;
+  border: 1px solid var(--line); border-radius: 5px; background: #fff; color: inherit;
+}
+#letter, #edit-text, #sktext { font-size: 1.02rem; line-height: 1.75; }
+button {
+  font: inherit; padding: .5rem 1rem; border-radius: 5px; cursor: pointer;
+  border: 1px solid var(--line); background: #fff; color: var(--ink);
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { border-color: var(--bad); color: var(--bad); }
+button:disabled { opacity: .55; cursor: progress; }
+table { width: 100%; border-collapse: collapse; margin-top: .8rem; font-size: .9rem; }
+th, td { text-align: right; padding: .45rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th:nth-child(2), td:nth-child(2) { text-align: start; }
+th { color: var(--muted); font-weight: 600; font-size: .82rem; }
+tbody tr:hover { background: #fafcfe; }
+.badge { display: inline-block; padding: .05rem .45rem; border-radius: 99px; font-size: .78rem; border: 1px solid; }
+.b-ok { color: var(--ok); border-color: var(--ok); }
+.b-warn { color: var(--warn); border-color: var(--warn); }
+.b-bad { color: var(--bad); border-color: var(--bad); }
+.banner { padding: .7rem .9rem; border-radius: 6px; margin-bottom: .9rem; border: 1px solid; }
+.banner.bad { background: #fdf3f2; border-color: var(--bad); color: #7a1a15; }
+.banner.ok { background: #f1f8f3; border-color: var(--ok); color: #14532d; }
+.banner ul { margin: .4rem 0 0; padding-inline-start: 1.1rem; }
+.sources { list-style: none; margin: 0; padding: 0; }
+.sources li { padding: .5rem 0; border-bottom: 1px solid var(--line); }
+.log { background: #0f1720; color: #d7e3ef; padding: .8rem; border-radius: 6px; overflow: auto; max-height: 18rem; font-size: .82rem; }
+.stats { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+.stat b { display: block; font-size: 1.35rem; }
+.stat span { color: var(--muted); font-size: .84rem; }
+footer { max-width: 1020px; margin: 0 auto; padding: 1rem 1.25rem 2.5rem; color: var(--muted); font-size: .88rem; }

@@ -3,9 +3,21 @@
 For the Windows machine measured in Phase 0: i7-8550U, 8 GB single-channel,
 spinning disk, Windows 11. Commands are PowerShell.
 
-**There is no web interface yet.** This is a command-line tool. Phase 6 builds
-the drafting and admin pages office staff would use; until then the operator
-is you.
+There are two ways to use it: the command line, and a local web page for
+office staff. The web page needs the optional extras:
+
+```powershell
+pip install -e ".[dev,web]"
+latters serve --db corpus.db --skeletons skeletons --model gemma3:1b
+```
+
+Then open <http://127.0.0.1:8765/>. It binds to loopback only — **there is no
+authentication and the corpus is official correspondence**, so do not put it
+on a network without thinking about that first.
+
+Use `--stub` to run the pages with no language model at all: retrieval, the
+skeleton, the safety checks and export all work, and only the body text is
+canned. It is the fastest way to show someone what the tool does.
 
 ---
 
@@ -190,6 +202,25 @@ latters draft "अंचल अधिकारी से दाखिल-खा�
 
 Expect roughly 45 seconds for a 400-word letter on the current hardware.
 
+## Step 6b — the web pages
+
+```powershell
+latters serve --db corpus.db --skeletons skeletons --model gemma3:1b
+```
+
+| page | for |
+|---|---|
+| `/` | drafting: describe the letter, get a draft, edit it, export DOCX/PDF/TXT |
+| `/admin` | upload more letters, browse lowest-trust-first, correct text in place, delete, edit skeletons |
+
+Every draft shows the past letters it was built from with their trust scores,
+what was stripped from the model's output, and any number the model invented.
+That panel is not decoration — it is the only thing standing between a
+plausible draft and a wrong letter leaving the office.
+
+PDF export needs LibreOffice. If it fails, export DOCX and print to PDF from
+Word; the letter is identical either way.
+
 ## Step 7 — correct the skeletons (30 minutes, once)
 
 Open each file in `skeletons\`. They have two sections, `## above the
@@ -286,3 +317,6 @@ whether the GPU deficit was PCIe transfer or real.
 | `cannot reach Ollama` | `ollama serve` is not running |
 | boxes instead of Hindi | console font — see Step 2 |
 | everything slow, disk at 100% | the spinning disk; see Step 0 |
+| `the web pages need the optional extras` | `pip install -e ".[web]"` |
+| PDF export fails, DOCX works | LibreOffice; export DOCX and print from Word |
+| page loads but nothing happens on click | open the browser console; the JavaScript is served from `/static/app.js`, not a CDN |

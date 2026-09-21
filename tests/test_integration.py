@@ -331,7 +331,7 @@ def test_every_third_party_import_is_declared():
     root = Path(__file__).resolve().parent.parent
     pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
     declared = set()
-    for block in ("dependencies", "dense", "dev"):
+    for block in ("dependencies", "dense", "dev", "web"):
         m = __import__("re").search(rf"^{block} = \[(.*?)\]", pyproject,
                                     __import__("re").M | __import__("re").S)
         if m:

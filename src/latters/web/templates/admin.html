@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% set page = 'admin' %}
+{% block body %}
+<section class="pane">
+  <h1>संग्रह की स्थिति</h1>
+  <div id="stats" class="stats"></div>
+</section>
+
+<section class="pane">
+  <h2>पुराने पत्र जोड़ें</h2>
+  <p class="meta">केवल .docx। पुरानी .doc/.rtf फाइलें पहले LibreOffice से बदलें।
+     <span class="en">LibreOffice preserves the per-run font information this pipeline depends on.</span></p>
+  <input type="file" id="files" multiple accept=".docx">
+  <button id="upload" class="primary">जोड़ें</button>
+  <pre id="uploadlog" class="log" hidden></pre>
+</section>
+
+<section class="pane">
+  <h2>पत्र देखें और सुधारें</h2>
+  <div class="row">
+    <input id="q" placeholder="खोजें…">
+    <select id="verdict"><option value="">सभी</option>
+      <option value="index">index</option><option value="review">review</option>
+      <option value="quarantine">quarantine</option></select>
+    <select id="form"><option value="">सभी प्रकार</option>
+      <option value="letter">letter</option><option value="order">order</option>
+      <option value="fragment">fragment</option></select>
+    <button id="search">खोजें</button>
+  </div>
+  <p class="meta">सबसे कम विश्वसनीयता वाले पहले। <span class="en">Lowest trust first — these are the ones worth your eyes.</span></p>
+  <table id="letters"><thead><tr>
+    <th>#</th><th>विषय / आरंभ</th><th>प्रकार</th><th>विश्वास</th><th>कमी</th><th></th>
+  </tr></thead><tbody></tbody></table>
+</section>
+
+<section class="pane" id="editor" hidden>
+  <h2>पत्र <span id="edit-id"></span> सुधारें</h2>
+  <p class="meta" id="edit-meta"></p>
+  <textarea id="edit-text" rows="16" spellcheck="false"></textarea>
+  <button id="save" class="primary">सुरक्षित करें और पुनः जाँचें</button>
+  <button id="delete" class="danger">हटाएँ</button>
+  <span id="editstatus" class="status"></span>
+</section>
+
+<section class="pane">
+  <h2>पत्र का ढाँचा <small class="en">— skeletons</small></h2>
+  <p class="meta">मशीन ने ढाँचा बनाया है; क्रम सुधारना आपका काम है। एक बार सुधारने पर वही चलेगा।
+     <span class="en">Mining cannot recover line order from a mixed category. Your edit wins permanently.</span></p>
+  <select id="sk"><option value="">— चुनें —</option>
+    {% for s in skeletons %}<option>{{ s }}</option>{% endfor %}</select>
+  <textarea id="sktext" rows="18" spellcheck="false" hidden></textarea>
+  <button id="sksave" class="primary" hidden>सुरक्षित करें</button>
+  <span id="skstatus" class="status"></span>
+</section>
+{% endblock %}

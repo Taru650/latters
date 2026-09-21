@@ -26,6 +26,28 @@ _RELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>"""
 
+#: [Content_Types].xml declares an Override for /word/styles.xml, so the part
+#: has to exist. Word tolerates the dangling declaration; LibreOffice rejects
+#: the whole package with "source file could not be loaded", which is how a
+#: PDF export fails without ever mentioning styles. Minimal but valid, and it
+#: sets a Devanagari-capable default so exported letters shape correctly.
+_STYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:docDefaults><w:rPrDefault><w:rPr>
+<w:rFonts w:ascii="Nirmala UI" w:hAnsi="Nirmala UI" w:cs="Nirmala UI"/>
+<w:sz w:val="24"/><w:szCs w:val="24"/>
+</w:rPr></w:rPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+<w:name w:val="Normal"/></w:style>
+</w:styles>"""
+
+#: Word opens a package without this part; LibreOffice refuses it outright
+#: with "source file could not be loaded", which surfaced as a failed PDF
+#: export. Empty is fine -- these documents reference nothing -- but the
+#: part has to exist.
+_DOC_RELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"""
+
 
 def run(text: str, font: str | None = None, *, size_pt: int | None = None,
         bold: bool = False, color: str | None = None) -> str:
@@ -87,5 +109,7 @@ def write(path: Path, body_parts: list[str]) -> Path:
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", _CONTENT_TYPES)
         z.writestr("_rels/.rels", _RELS)
+        z.writestr("word/_rels/document.xml.rels", _DOC_RELS)
+        z.writestr("word/styles.xml", _STYLES)
         z.writestr("word/document.xml", document)
     return path
