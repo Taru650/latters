@@ -347,6 +347,7 @@ whether the GPU deficit was PCIe transfer or real.
 |---|---|
 | `no such path:` | typo in the archive path — deliberately an error, not "0 files" |
 | `no corpus database at` | run `latters segment` first; nothing else creates it |
+| `no such column: form` (or any column) | a corpus built by an older version. `git pull` and `pip install -e .`, then re-run — it migrates in place. Follow with `latters segment archive --db corpus.db --refresh` to fill in the fields it could not invent |
 | `nothing to evaluate` | run `latters classify --write`, or lower `--min-cell` |
 | `cannot reach Ollama` | `ollama serve` is not running |
 | boxes instead of Hindi | console font — see Step 2 |

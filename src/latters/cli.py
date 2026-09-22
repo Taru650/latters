@@ -379,8 +379,9 @@ def cmd_segment(args: argparse.Namespace) -> int:
 
     if args.db:
         with Store(args.db) as store:
-            ins, dup = store.add(rows)
-            print(f"\nstored {ins} new, {dup} already present -> {args.db}")
+            ins, dup = store.add(rows, refresh=args.refresh)
+            verb = "re-scored" if args.refresh else "already present"
+            print(f"\nstored {ins} new, {dup} {verb} -> {args.db}")
             print("  " + json.dumps(store.stats(), ensure_ascii=False))
     return 0
 
@@ -1219,6 +1220,11 @@ def build_parser() -> argparse.ArgumentParser:
     seg.add_argument("--tier", default="docx", choices=["unicode", "docx", "pdf", "ocr"])
     seg.add_argument("--latin-digits", action="store_true")
     seg.add_argument("--vocab-min", type=int, default=3)
+    seg.add_argument("--refresh", action="store_true",
+                     help="re-score letters already in the corpus instead of "
+                          "skipping them. Use after upgrading: dedupe is on "
+                          "the TEXT, so an old corpus keeps NULL form and "
+                          "subject for ever otherwise. Keeps hand corrections.")
     seg.set_defaults(func=cmd_segment)
 
     aud = sub.add_parser("audit", help="are the anchors right for this office?")

@@ -263,6 +263,14 @@ and **zero** Unicode Devanagari, so there is no free parallel text.
   database cannot satisfy. A test asserts the list and the schema agree;
   without it the drift is invisible until someone with an old corpus
   upgrades, which is how `no such column: form` reached the office.
+- **Migrating is only half of an upgrade.** `_migrate` adds the columns;
+  it cannot invent their values. Dedupe is content-addressed on the text,
+  so re-running `segment` skips every migrated row and it keeps NULL
+  `form` and `subject` for ever — and a letter with no subject is invisible
+  to the retrieval query set and to the FTS subject column. `segment
+  --refresh` re-scores rows already present, without touching `text`, so
+  hand corrections survive. After any upgrade that adds a derived field,
+  tell the office to run it.
 - **SQLite thread affinity.** `Store` opens with `check_same_thread=False`
   and takes a write lock, because the web app runs blocking work in threads.
 

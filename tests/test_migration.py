@@ -125,3 +125,78 @@ def test_the_migration_list_matches_the_schema(tmp_path):
     assert listed | always == actual, (
         f"_LETTER_COLUMNS is out of step with the schema: "
         f"missing {actual - listed - always}, extra {listed - actual}")
+
+
+# --- migration is not enough on its own -----------------------------------
+def test_resegmenting_does_not_fix_a_migrated_row(tmp_path):
+    """Dedupe is content-addressed on text_hash, so re-running `segment`
+    over the same archive correctly skips everything -- right when nothing
+    changed, wrong after an upgrade. A migrated row keeps NULL `form` and
+    `subject` for ever, and a letter with no subject is invisible to the
+    retrieval query set and to the FTS subject column."""
+    from latters.store import LetterRow
+
+    db = tmp_path / "c.db"
+    row = LetterRow(source_file="a.docx", seq=1, text="कार्यालय समीक्षा बैठक")
+    with Store(db) as store:
+        store.add([row])
+        store.db.execute("UPDATE letters SET form=NULL, subject=NULL")
+        store.db.commit()
+
+        scored = LetterRow(source_file="a.docx", seq=1,
+                           text="कार्यालय समीक्षा बैठक",
+                           form="letter", subject="समीक्षा बैठक")
+        inserted, skipped = store.add([scored])
+        assert (inserted, skipped) == (0, 1)
+        assert store.get(1)["form"] is None, "plain add must not update"
+
+
+def test_refresh_rescores_a_migrated_row(tmp_path):
+    from latters.store import LetterRow
+
+    db = tmp_path / "c.db"
+    with Store(db) as store:
+        store.add([LetterRow(source_file="a.docx", seq=1,
+                             text="कार्यालय समीक्षा बैठक")])
+        store.db.execute("UPDATE letters SET form=NULL, subject=NULL, "
+                         "trust=0.1, verdict='review'")
+        store.db.commit()
+
+        store.add([LetterRow(source_file="a.docx", seq=1,
+                             text="कार्यालय समीक्षा बैठक",
+                             form="letter", subject="समीक्षा बैठक",
+                             trust=0.93, verdict="index")], refresh=True)
+        got = store.get(1)
+        assert got["form"] == "letter"
+        assert got["subject"] == "समीक्षा बैठक"
+        assert got["verdict"] == "index"
+
+
+def test_refresh_never_rewrites_the_letter_itself(tmp_path):
+    """The row is matched BY its text, so there is nothing to change -- and
+    a letter corrected on the admin page must keep the correction. Only the
+    derived scores are rewritten."""
+    from latters.store import LetterRow
+
+    db = tmp_path / "c.db"
+    text = "कार्यालय समीक्षा बैठक"
+    with Store(db) as store:
+        store.add([LetterRow(source_file="a.docx", seq=1, text=text)])
+        store.add([LetterRow(source_file="b.docx", seq=9, text=text,
+                             form="order")], refresh=True)
+        got = store.get(1)
+        assert got["text"] == text
+        assert got["form"] == "order"
+
+
+def test_refresh_still_inserts_letters_that_are_genuinely_new(tmp_path):
+    from latters.store import LetterRow
+
+    with Store(tmp_path / "c.db") as store:
+        store.add([LetterRow(source_file="a.docx", seq=1, text="पहला पत्र")])
+        ins, dup = store.add(
+            [LetterRow(source_file="a.docx", seq=1, text="पहला पत्र"),
+             LetterRow(source_file="a.docx", seq=2, text="दूसरा पत्र")],
+            refresh=True)
+        assert (ins, dup) == (1, 1)
+        assert store.count() == 2

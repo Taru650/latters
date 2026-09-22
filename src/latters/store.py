@@ -269,8 +269,31 @@ class Store:
         self.close()
 
     # --- writing ----------------------------------------------------------
-    def add(self, rows: Iterable[LetterRow]) -> tuple[int, int]:
-        """Insert letters. Returns (inserted, skipped_as_duplicate)."""
+    def add(self, rows: Iterable[LetterRow],
+            *, refresh: bool = False) -> tuple[int, int]:
+        """Insert letters. Returns (inserted, skipped_or_refreshed).
+
+        `refresh` re-scores a letter that is already present instead of
+        skipping it, and it exists because of a gap the office found.
+
+        Dedupe is content-addressed on `text_hash`, so re-running `segment`
+        over the same archive correctly skips everything -- which is right
+        when nothing has changed, and wrong after an upgrade. A corpus built
+        before Phase 2 migrates cleanly (columns are added, letters are
+        kept) but its rows carry NULL for `form`, `subject` and
+        `completeness`, and no amount of re-segmenting fixes them because
+        the text is identical every time. A letter with no subject is
+        invisible to the retrieval query set and to the FTS subject column,
+        so the corpus is quietly second-class for ever.
+
+        The alternative anyone reaches for -- delete the database and
+        rebuild -- does work, and throws away the admin page's hand
+        corrections, which exist nowhere else. `refresh` is how you get both.
+
+        It deliberately does NOT touch `text`: the row is matched BY its
+        text, so there is nothing to change, and a corrected letter keeps
+        the correction. Only the derived scores are rewritten.
+        """
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         inserted = skipped = 0
         with self._write_lock:
@@ -292,6 +315,24 @@ class Store:
                        r.subject, now))
                   inserted += 1
               except sqlite3.IntegrityError:
+                  if refresh:
+                      self.db.execute(
+                          """UPDATE letters SET
+                               source_file = ?, seq = ?, start_line = ?,
+                               end_line = ?, source_tier = ?,
+                               conversion_confidence = ?, completeness = ?,
+                               trust = ?, verdict = ?, opened_by = ?,
+                               form = ?, anchors = ?, violations = ?,
+                               missing = ?, subject = ?
+                             WHERE text_hash = ?""",
+                          (r.source_file, r.seq, r.start_line, r.end_line,
+                           r.source_tier, r.conversion_confidence,
+                           r.completeness, r.trust, r.verdict, r.opened_by,
+                           r.form,
+                           json.dumps(r.anchors or {}, ensure_ascii=False),
+                           json.dumps(r.violations or {}, ensure_ascii=False),
+                           json.dumps(r.missing or [], ensure_ascii=False),
+                           r.subject, r.hash()))
                   skipped += 1
           self.db.commit()
         return inserted, skipped
