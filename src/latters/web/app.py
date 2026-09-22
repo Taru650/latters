@@ -180,13 +180,20 @@ def create_app(db: str | Path = "corpus.db",
     @app.get("/", response_class=HTMLResponse)
     async def drafting_page(request: Request):
         stats = ws.store.stats()
-        cells = sorted({(r["department"], r["letter_type"]) for r in ws.store.db.execute(
-            "SELECT DISTINCT department, letter_type FROM letters "
-            "WHERE department IS NOT NULL")})
+        # One query per dropdown. The previous version selected the PAIR and
+        # sorted it, which raised `'<' not supported between 'str' and
+        # 'NoneType'` on a real corpus the first time it was opened: the
+        # WHERE clause filtered `department IS NOT NULL` but not
+        # `letter_type`, and the two are not filled in together -- 98% of
+        # that corpus had a department and only 94% had a type, an
+        # asymmetry this project's own REBUILD.md records.
+        #
+        # The pair was never needed: the two lists are independent, and
+        # asking for each one separately cannot have the bug at all.
         return templates.TemplateResponse(request, "draft.html", {
             "stats": stats, "model": app.state.model,
-            "departments": sorted({d for d, _ in cells if d}),
-            "letter_types": sorted({t for _, t in cells if t}),
+            "departments": _distinct(ws.store, "department"),
+            "letter_types": _distinct(ws.store, "letter_type"),
         })
 
     @app.get("/admin", response_class=HTMLResponse)
@@ -429,6 +436,19 @@ def _safe_skeleton_path(root: Path, name: str) -> Path:
     if candidate.parent != root.resolve() or not candidate.name.endswith(".md"):
         raise HTTPException(400, "bad skeleton name")
     return candidate
+
+
+def _distinct(store, column: str) -> list[str]:
+    """Sorted distinct values of one label column, NULLs excluded in SQL.
+
+    `column` is never user input -- it is a literal at both call sites --
+    but it is interpolated into SQL, so it is checked anyway rather than
+    relying on that staying true.
+    """
+    if column not in ("department", "letter_type"):
+        raise ValueError(f"not a label column: {column!r}")
+    return sorted(r[0] for r in store.db.execute(
+        f"SELECT DISTINCT {column} FROM letters WHERE {column} IS NOT NULL"))
 
 
 def _ingest(ws: Workspace, folder: Path) -> dict:

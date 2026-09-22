@@ -271,6 +271,15 @@ and **zero** Unicode Devanagari, so there is no free parallel text.
   --refresh` re-scores rows already present, without touching `text`, so
   hand corrections survive. After any upgrade that adds a derived field,
   tell the office to run it.
+- **Test fixtures built by running the pipeline are too clean.** Three
+  bugs reached the office in a row for this reason; the third was
+  `'<' not supported between 'str' and 'NoneType'`, sorting
+  (department, letter_type) pairs. A real corpus is ragged: 98% have a
+  department and 94% have a letter type, an asymmetry recorded in this
+  project's own REBUILD.md while the bug was live. `tests/test_partial_labels.py`
+  holds a deliberately ragged corpus — every combination of present and
+  absent label — and walks every route. Add to it rather than to a fixture
+  that ran the whole pipeline.
 - **SQLite thread affinity.** `Store` opens with `check_same_thread=False`
   and takes a write lock, because the web app runs blocking work in threads.
 

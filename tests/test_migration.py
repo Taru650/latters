@@ -200,3 +200,26 @@ def test_refresh_still_inserts_letters_that_are_genuinely_new(tmp_path):
             refresh=True)
         assert (ins, dup) == (1, 1)
         assert store.count() == 2
+
+
+def test_refresh_does_not_clobber_the_classifier_labels(tmp_path):
+    """`department` and `letter_type` are written by `classify --write`,
+    not by segmentation, so a re-score must leave them alone -- otherwise
+    `segment --refresh` would silently undo the labelling step and the
+    department retrieval filter would go dark."""
+    from latters.store import LetterRow
+
+    db = tmp_path / "c.db"
+    text = "कार्यालय समीक्षा बैठक"
+    with Store(db) as store:
+        store.add([LetterRow(source_file="a.docx", seq=1, text=text)])
+        store.db.execute("UPDATE letters SET department=?, letter_type=? "
+                         "WHERE id=1", ("राजस्व", "जाँच"))
+        store.db.commit()
+
+        store.add([LetterRow(source_file="a.docx", seq=1, text=text,
+                             form="letter", subject="समीक्षा")], refresh=True)
+        got = store.get(1)
+        assert got["form"] == "letter"          # re-scored
+        assert got["department"] == "राजस्व"     # untouched
+        assert got["letter_type"] == "जाँच"      # untouched
