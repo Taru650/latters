@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-import subprocess
 import tempfile
 import uuid
 from contextlib import asynccontextmanager
@@ -34,6 +33,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .. import soffice as S
 from ..classify import TrainedClassifier
 from ..draft import Budget, DraftService, load_skeletons
 from ..extract import UnsupportedFormat, convert_document, read_document
@@ -552,41 +552,29 @@ def _write_export(text: str, fmt: str, stem: Path,
     if fmt == "docx":
         return docx
 
-    soffice = shutil.which("soffice") or shutil.which("libreoffice")
-    if not soffice:
-        raise HTTPException(
-            501, "PDF export needs LibreOffice, which is not installed. "
-                 "Export DOCX and print to PDF from Word instead — the "
-                 "letter is identical either way.")
-
     # ReportLab is not an option: it does not shape Devanagari conjuncts, so
     # the PDF would be subtly wrong in a way nobody notices until it is
     # printed. LibreOffice reuses the system's own shaping engine.
-    try:
-        proc = subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf",
-             "--outdir", str(docx.parent), str(docx)],
-            capture_output=True, timeout=180)
-    except subprocess.TimeoutExpired:
-        raise HTTPException(
-            504, "LibreOffice did not finish within three minutes. Export "
-                 "DOCX instead; the first LibreOffice run on a machine is "
-                 "much slower than later ones.")
+    #
+    # Finding it is `soffice.find()`, not `shutil.which`, because on Windows
+    # LibreOffice is not on PATH -- see soffice.py. The first report of this
+    # bug was PDF failing on a machine with LibreOffice in the Start menu.
+    pdf, why = S.to_pdf(docx, docx.parent)
+    if pdf is not None:
+        return pdf
 
-    pdf = docx.with_suffix(".pdf")
-    if not pdf.exists():
-        # Say what LibreOffice said. "Produced no PDF" sends the reader
-        # looking at their letter, when the cause is nearly always a broken
-        # or first-run LibreOffice profile and has nothing to do with the
-        # document -- in one environment it could not convert a plain text
-        # file either.
-        detail = (proc.stderr or b"").decode("utf-8", "replace").strip()
-        detail = " / ".join(l for l in detail.splitlines()
-                            if l.strip() and "javaldx" not in l)[:300]
+    fallback = ("The DOCX export is unaffected \u2014 use that and print to "
+                "PDF from Word. The letter is identical either way.")
+    if why == "not installed":
         raise HTTPException(
-            502, "LibreOffice could not produce a PDF"
-                 + (f": {detail}. " if detail else ". ")
-                 + "The DOCX export is unaffected — use that and print to "
-                   "PDF from Word. To check LibreOffice itself, try "
-                   "converting any file from the command line.")
-    return pdf
+            501, "PDF export needs LibreOffice and it could not be found, "
+                 "on PATH or in Program Files. " + fallback)
+    if why == "timeout":
+        raise HTTPException(
+            504, "LibreOffice did not finish within three minutes. The very "
+                 "first conversion on a machine is much slower than later "
+                 "ones, so try once more. " + fallback)
+    # Say what LibreOffice said. "Produced no PDF" sends the reader looking
+    # at their letter, when the cause is nearly always LibreOffice itself.
+    raise HTTPException(
+        502, f"LibreOffice could not produce a PDF: {why}. " + fallback)

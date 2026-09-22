@@ -252,8 +252,23 @@ what was stripped from the model's output, and any number the model invented.
 That panel is not decoration — it is the only thing standing between a
 plausible draft and a wrong letter leaving the office.
 
-PDF export needs LibreOffice. If it fails, export DOCX and print to PDF from
-Word; the letter is identical either way.
+PDF export needs LibreOffice, and the application looks for it on PATH and
+in `C:\Program Files\LibreOffice\program\` — the Windows installer does
+not add itself to PATH, so finding it there is the normal case, not a
+fallback. `latters doctor` prints the path it found.
+
+If PDF still fails, the message appears under the export buttons and says
+what LibreOffice said. Two causes are worth knowing:
+
+* **A LibreOffice window is open.** It used to block the headless
+  conversion, because the two shared one profile. The conversion now gets
+  its own, so this should no longer happen — if it does, close Writer and
+  say so, because that means the fix is incomplete.
+* **The Writer module is missing.** `soffice` runs and converts nothing.
+  Reinstall full LibreOffice, not `-core`.
+
+DOCX and TXT export never touch LibreOffice, so "export DOCX and print to
+PDF from Word" always works and produces an identical letter.
 
 ## Step 6c — is `gemma3:4b-it-qat` worth it?
 

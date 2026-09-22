@@ -36,6 +36,11 @@
     <button data-export="txt">TXT</button>
     <span id="timing" class="meta"></span>
   </div>
+  <!-- Export failures used to be written to #status, which sits above the
+       draft pane -- off-screen, in grey, while the reader is looking at the
+       export buttons. "PDF is not downloading" was the report; the reason
+       had been on the page the whole time. -->
+  <div id="exportstatus" hidden></div>
 </section>
 
 <section class="pane" id="evidence" hidden>

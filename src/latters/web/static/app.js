@@ -76,6 +76,7 @@ function initDraft() {
     btn.addEventListener("click", async () => {
       const fmt = btn.dataset.export;
       btn.disabled = true;
+      exportNote("", null);
       try {
         const res = await fetch("/api/export/" + fmt, {
           method: "POST",
@@ -85,21 +86,63 @@ function initDraft() {
             draft_id: currentDraftId,
           }),
         });
-        if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+        if (!res.ok) {
+          // The server sends JSON on every error it raises itself, but a
+          // crash upstream of the handler sends HTML, and calling .json()
+          // on that throws a parse error that replaces the real status.
+          let detail = res.statusText;
+          try { detail = (await res.json()).detail || detail; } catch (_) {}
+          throw new Error(detail);
+        }
         const blob = await res.blob();
-        const a = el("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = (res.headers.get("content-disposition") || "")
-          .split("filename=")[1]?.replace(/"/g, "") || "letter." + fmt;
-        a.click();
-        URL.revokeObjectURL(a.href);
+        download(blob, filenameFrom(res, fmt));
+        exportNote(fmt.toUpperCase() + " सहेजा गया।", "ok");
       } catch (e) {
-        $("#status").textContent = "निर्यात विफल: " + e.message;
+        exportNote("निर्यात विफल — " + e.message, "bad");
       } finally {
         btn.disabled = false;
       }
     });
   });
+}
+
+// Next to the export buttons, not at the top of the page, and as a banner
+// rather than grey 0.88rem text. An error nobody sees is the same as no
+// error at all, which is how a missing LibreOffice was reported as "PDF is
+// not downloading".
+function exportNote(msg, kind) {
+  const box = $("#exportstatus");
+  if (!box) return;
+  box.textContent = "";
+  box.hidden = !msg;
+  if (msg) box.appendChild(el("div", "banner " + (kind || "ok"), msg));
+}
+
+function filenameFrom(res, fmt) {
+  const cd = res.headers.get("content-disposition") || "";
+  // RFC 5987 first: a filename* wins over filename when both are present.
+  const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(cd);
+  if (star) { try { return decodeURIComponent(star[1].trim()); } catch (_) {} }
+  const plain = /filename="?([^";]+)"?/i.exec(cd);
+  return (plain && plain[1].trim()) || "letter." + fmt;
+}
+
+function download(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = el("a");
+  a.href = url;
+  a.download = name;
+  // In the document, not detached: a detached anchor's click is ignored by
+  // some browsers and by Windows group policy configurations.
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoking in the same tick can cancel a download that has not started
+  // reading the blob yet. The bigger the file the likelier that is, which
+  // is why PDF failed where TXT and DOCX did not. One minute is far more
+  // than any browser needs and the blob is freed on navigation anyway.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 function renderDraft(d) {

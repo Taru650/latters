@@ -318,34 +318,43 @@ def _ocr(r: Report) -> None:
 
 
 def _libreoffice(r: Report) -> None:
-    exe = shutil.which("soffice") or shutil.which("libreoffice")
+    """Find it the way the export does, then make it convert something.
+
+    Both halves matter. `shutil.which` alone reports "not installed" on a
+    Windows box where LibreOffice is in the Start menu, because the
+    installer never touches PATH. And finding it is not enough either: one
+    environment had libreoffice-core, where `soffice` existed and could not
+    convert a plain text file for want of the Writer module.
+
+    This shares `soffice.py` with the export route on purpose. A doctor that
+    passes while the export says "not installed" sends the reader hunting
+    through the wrong half of the system.
+    """
+    from . import soffice
+
+    exe = soffice.find()
     if not exe:
-        r.add("pdf export", WARN, "LibreOffice not installed", optional=True,
-              fix="Export DOCX and print to PDF from Word instead -- the "
+        r.add("pdf export", WARN, "LibreOffice not found", optional=True,
+              fix="Looked on PATH and in Program Files.\n"
+                  "Export DOCX and print to PDF from Word instead -- the "
                   "letter is identical either way.")
         return
-    # Run it, do not just find it. One environment had libreoffice-core with
-    # no Writer module: `soffice` existed and could not convert a plain text
-    # file, which surfaced as a PDF export failure blaming the document.
-    try:
-        import tempfile
-        with tempfile.TemporaryDirectory(prefix="latters-doctor-") as tmp:
-            probe = Path(tmp) / "probe.txt"
-            probe.write_text("probe", encoding="utf-8")
-            subprocess.run([exe, "--headless", "--convert-to", "pdf",
-                            "--outdir", tmp, str(probe)],
-                           capture_output=True, timeout=180)
-            if probe.with_suffix(".pdf").exists():
-                r.add("pdf export", OK, "LibreOffice converts")
-            else:
-                r.add("pdf export", WARN,
-                      "LibreOffice cannot convert even a text file",
-                      optional=True,
-                      fix="The Writer module is missing -- this is not your "
-                          "letter.\nInstall full LibreOffice, not -core. "
-                          "Until then export DOCX.")
-    except (OSError, subprocess.SubprocessError) as exc:
-        r.add("pdf export", WARN, f"could not test: {exc}", optional=True)
+
+    ok, why = soffice.converts()
+    if ok:
+        r.add("pdf export", OK, f"LibreOffice converts  ({exe})")
+    elif why == "timeout":
+        r.add("pdf export", WARN, "LibreOffice did not finish in time",
+              optional=True,
+              fix="The first conversion on a machine is much slower than "
+                  "later ones. Run this again.")
+    else:
+        r.add("pdf export", WARN, f"found it, but it cannot convert: {why}",
+              optional=True,
+              fix="This is LibreOffice, not your letter.\n"
+                  "Close any open LibreOffice window and try again; if it "
+                  "still fails, reinstall full LibreOffice (not -core).\n"
+                  "Until then export DOCX.")
 
 
 def _fonts(r: Report) -> None:

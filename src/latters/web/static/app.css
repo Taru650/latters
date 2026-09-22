@@ -58,6 +58,8 @@ tbody tr:hover { background: #fafcfe; }
 .banner.bad { background: #fdf3f2; border-color: var(--bad); color: #7a1a15; }
 .banner.ok { background: #f1f8f3; border-color: var(--ok); color: #14532d; }
 .banner ul { margin: .4rem 0 0; padding-inline-start: 1.1rem; }
+#exportstatus { margin-top: .7rem; }
+#exportstatus .banner { margin-bottom: 0; }
 .sources { list-style: none; margin: 0; padding: 0; }
 .sources li { padding: .5rem 0; border-bottom: 1px solid var(--line); }
 .log { background: #0f1720; color: #d7e3ef; padding: .8rem; border-radius: 6px; overflow: auto; max-height: 18rem; font-size: .82rem; }
