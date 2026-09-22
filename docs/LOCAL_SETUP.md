@@ -11,6 +11,24 @@ pip install -e ".[dev,web]"
 latters serve --db corpus.db --skeletons skeletons --model gemma3:1b
 ```
 
+### Step 8b — if anything at all goes wrong, run this first
+
+```powershell
+latters doctor
+```
+
+It checks every external thing the application needs — Python, free disk and
+RAM, the corpus, the skeletons, Ollama, the model, poppler, Tesseract and its
+Hindi pack, LibreOffice, and a Devanagari font — and prints the exact command
+that fixes each failure. It exits non-zero only for problems that actually
+stop the application; a missing Tesseract is a warning, because a `.docx`
+archive does not need one.
+
+It runs without a corpus on purpose. A missing `corpus.db` is the most likely
+thing to be wrong on a fresh install, and refusing to run would withhold the
+diagnosis exactly when it is needed. `start.bat` runs it automatically if the
+server exits.
+
 ### Step 9 — check what has and has not been measured
 
 ```powershell

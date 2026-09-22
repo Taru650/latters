@@ -51,9 +51,13 @@ start "" http://127.0.0.1:%PORT%/
 
 latters serve --db corpus.db --skeletons skeletons --model %MODEL% --port %PORT%
 
-REM  If serve exits immediately the browser is already open on a dead page,
-REM  so hold the window: the reason is the last thing printed above it.
+REM  If serve exits immediately the browser is already open on a dead page.
+REM  Rather than leave the reason buried in scrollback, diagnose it: `doctor`
+REM  checks every external thing this needs and prints the fix for each.
 echo.
-echo   The application has stopped.
+echo   The application has stopped. Checking why...
+echo.
+latters doctor --db corpus.db --skeletons skeletons --model %MODEL%
+echo.
 pause
 endlocal

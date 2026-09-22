@@ -22,6 +22,7 @@
 
     latters retrieve REQUEST --db X.db   find the letters to draft from
     latters eval --db X.db               measure retrieval against baselines
+    latters doctor                       check everything the app needs
     latters scorecard --db X.db          all three scorecards (Phase 7)
     latters backup --db X.db             consistent snapshot of the corpus
 
@@ -847,6 +848,21 @@ def cmd_draft(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Why does it not work yet? One command, in failure order.
+
+    Deliberately does NOT require --db to exist: a missing corpus is the
+    most likely thing to be wrong on a fresh install and refusing to run
+    would withhold the diagnosis at the exact moment it is needed.
+    """
+    from .doctor import run
+
+    report = run(db=args.db, skeletons=args.skeletons, model=args.model,
+                 host=args.ollama, stub=args.stub)
+    print(report.render())
+    return 1 if report.blocking else 0
+
+
 def cmd_scorecard(args: argparse.Namespace) -> int:
     """Phase 7: all three scorecards, loudly including the empty ones."""
     if _require_db(args.db) is None:
@@ -1266,6 +1282,14 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--stub", action="store_true",
                     help="serve without an LLM; everything else works")
     sv.set_defaults(func=cmd_serve)
+
+    dr = sub.add_parser("doctor", help="check everything the app needs")
+    dr.add_argument("--db", default="corpus.db")
+    dr.add_argument("--skeletons", default="skeletons")
+    dr.add_argument("--model", default="gemma3:1b")
+    dr.add_argument("--ollama", default="http://127.0.0.1:11434")
+    dr.add_argument("--stub", action="store_true")
+    dr.set_defaults(func=cmd_doctor)
 
     sc = sub.add_parser("scorecard", help="Phase 7: all three scorecards")
     sc.add_argument("--db", required=True)

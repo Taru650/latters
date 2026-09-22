@@ -1,5 +1,12 @@
 # latters — offline departmental letter drafting assistant
 
+
+> **Status: all eight phases built, 411 tests passing — and the project is
+> not finished.** The converted Hindi has never been read by a Hindi reader,
+> no model has ever run in any environment where this was developed, and the
+> Windows installer has never run on Windows. **[docs/COMPLETION.md](docs/COMPLETION.md)**
+> says exactly where the line is and what only the office can do.
+
 Fully offline. No cloud API, no telemetry, nothing leaves the machine.
 
 Target hardware and the full phase plan: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
