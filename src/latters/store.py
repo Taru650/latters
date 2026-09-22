@@ -132,6 +132,35 @@ END;
 """
 
 
+#: Every column `letters` must have, for `Store._migrate`. Kept beside the
+#: schema rather than parsed out of it: a regex over CREATE TABLE would go
+#: quietly wrong the first time someone wrote a constraint across two lines,
+#: and a test asserts the two agree.
+#:
+#: Order matters only for readability. `id`, `source_file`, `seq`, `text`,
+#: `text_hash`, `source_tier` and `created_at` are NOT listed: they are NOT
+#: NULL and have existed since the first version, so a database without them
+#: is not an old corpus, it is a different table.
+_LETTER_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("start_line", "INTEGER"),
+    ("end_line", "INTEGER"),
+    ("conversion_confidence", "REAL"),
+    ("completeness", "REAL"),
+    ("trust", "REAL"),
+    ("verdict", "TEXT"),
+    ("opened_by", "TEXT"),
+    ("form", "TEXT"),
+    ("anchors", "TEXT"),
+    ("violations", "TEXT"),
+    ("missing", "TEXT"),
+    ("letter_number", "TEXT"),
+    ("letter_date", "TEXT"),
+    ("subject", "TEXT"),
+    ("department", "TEXT"),
+    ("letter_type", "TEXT"),
+)
+
+
 @dataclass
 class LetterRow:
     source_file: str
@@ -182,12 +211,53 @@ class Store:
                                   timeout=30.0)
         self.db.row_factory = sqlite3.Row
         self._write_lock = threading.RLock()
+        # Columns BEFORE the schema script, or the script itself fails: it
+        # builds indexes and FTS triggers that reference columns an older
+        # database does not have. See _migrate.
+        added = self._migrate()
         self.db.executescript(_SCHEMA)
+        if added:
+            # The FTS table is external-content over `letters`. If a column
+            # it indexes was only just added, its index is stale.
+            self.db.execute(
+                "INSERT INTO letters_fts(letters_fts) VALUES('rebuild')")
         self.db.execute(
             "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (str(SCHEMA_VERSION),))
         self.db.commit()
+
+    def _migrate(self) -> list[str]:
+        """Add columns an older database is missing. Returns what was added.
+
+        SCHEMA_VERSION existed from the beginning and was never *used*: the
+        schema script is all `CREATE TABLE IF NOT EXISTS`, which silently
+        does nothing when the table is already there. A new TABLE therefore
+        appeared on upgrade -- which is why the v2 to v3 `drafts` migration
+        seemed to work and got a passing test -- but a new COLUMN never did.
+
+        Found in the field, not here: a corpus built before the form-aware
+        segmentation of Phase 2 was opened by the current code and the web
+        app died with `no such column: form` on the first page load. An
+        older one fails harder, inside this constructor, because the schema
+        script's own index on `department` cannot be built.
+
+        ALTER TABLE ADD COLUMN is non-destructive and O(1) in SQLite; every
+        column added here is nullable with no default, so existing rows read
+        back NULL, which is exactly what "this letter predates the field"
+        should mean.
+        """
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(letters)")}
+        if not have:
+            return []                      # fresh database, nothing to do
+        added = []
+        for name, decl in _LETTER_COLUMNS:
+            if name not in have:
+                self.db.execute(f"ALTER TABLE letters ADD COLUMN {name} {decl}")
+                added.append(name)
+        if added:
+            self.db.commit()
+        return added
 
     def close(self) -> None:
         self.db.close()

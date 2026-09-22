@@ -255,6 +255,14 @@ and **zero** Unicode Devanagari, so there is no free parallel text.
   `word/_rels/document.xml.rels`.** Word tolerates their absence;
   LibreOffice refuses the package, which surfaces as a failed PDF export that
   never mentions styles.
+- **Schema changes need `_LETTER_COLUMNS` updating too.** Every statement
+  in the schema script is `CREATE TABLE IF NOT EXISTS`, so a new TABLE
+  appears on upgrade but a new COLUMN never does. `Store._migrate` adds
+  missing columns with ALTER TABLE before the script runs — it has to be
+  before, because the script builds an index on `department` that an old
+  database cannot satisfy. A test asserts the list and the schema agree;
+  without it the drift is invisible until someone with an old corpus
+  upgrades, which is how `no such column: form` reached the office.
 - **SQLite thread affinity.** `Store` opens with `check_same_thread=False`
   and takes a write lock, because the web app runs blocking work in threads.
 

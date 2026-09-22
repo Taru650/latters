@@ -181,10 +181,19 @@ def _corpus(r: Report, db: Path) -> None:
     try:
         from .store import Store
         with Store(db) as store:
+            # stats() is the call the drafting page makes first, and it
+            # reads the newest columns. Opening the database is not enough
+            # of a check: an old corpus opened fine and died on page load.
             stats = store.stats()
     except Exception as exc:
         r.add("corpus", FAIL, f"unreadable: {exc}",
-              fix="Restore the newest file from backups\\ over this one.")
+              fix="If this mentions a missing column, the corpus predates "
+                  "the code and\n"
+                  "the migration did not run -- `pip install -e .` in the "
+                  "repo, then retry.\n"
+                  "Otherwise restore the newest file from backups\\ over "
+                  "this one, or rebuild:\n"
+                  "  latters segment archive --db corpus.db")
         return
 
     n = stats["letters"]
