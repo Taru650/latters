@@ -371,3 +371,64 @@ def test_packaged_gold_set_is_found_without_a_source_checkout():
     # ...and a user's own file of the same name must override it, so an
     # office can correct the seed set without editing its installation.
     assert discover()
+
+
+# --- what the first real Gemma draft carried -------------------------------
+#: Verbatim from the first letter this system ever generated on the office
+#: machine, trimmed. Every defect below was in it.
+_REAL = """यह पत्र तराना कुमार की स्थानांतरण के संबंध में है।
+
+*   **कार्यक्षेत्र:** वर्तमान कार्यक्षेत्र अधिक उपयुक्त होंगे।
+*   **परिवार संबंधी कारण:** स्थानांतरण आवश्यक है।
+
+धन्यवाद,
+भवदीय,
+[आपका नाम]
+[आपका पद]
+[संपर्क नंबर]"""
+
+
+def test_markdown_never_reaches_a_government_letter():
+    """A 1B model reaches for bullets and bold because that is what its
+    training data looks like. The office's letters contain neither."""
+    from latters.draft import clean_body
+    out, removed = clean_body(_REAL)
+    assert "*" not in out and "#" not in out
+    assert "कार्यक्षेत्र:" in out          # the heading survives
+    assert any("markdown" in r for r in removed)
+
+
+def test_invented_placeholders_are_stripped():
+    """The model wrote its own signature block below the skeleton's:
+    [आपका नाम] [आपका पद] [संपर्क नंबर]."""
+    from latters.draft import clean_body
+    out, removed = clean_body(_REAL)
+    assert "[" not in out and "]" not in out
+    assert any("placeholder" in r for r in removed)
+
+
+def test_a_trailing_comma_no_longer_defeats_the_closing_strip():
+    """THE bug: `_CLOSING_LINE` anchored to end-of-line right after the
+    word, so `भवदीय,` escaped and the letter carried two sign-offs."""
+    from latters.draft import clean_body
+    out, _ = clean_body(_REAL)
+    assert "भवदीय" not in out and "धन्यवाद" not in out
+
+
+def test_the_models_salutation_is_replaced_by_the_offices():
+    """Measured house style: महाशय 356 times in the archive, महोदय zero.
+    The model opened महोदय -- correct Hindi, wrong register, and a second
+    salutation on top of the skeleton's."""
+    from latters.draft import clean_body
+    out, removed = clean_body("महोदय,\n\nयह पत्र भेजा जा रहा है।")
+    assert "महोदय" not in out
+    assert any("salutation" in r for r in removed)
+
+
+def test_the_addressee_block_is_NOT_stripped():
+    """`सेवा में, जिलाधिकारी, वैशाली` is content the model derived from the
+    request. assemble() already skips a skeleton line the body repeats, so
+    removing it here would lose the addressee entirely."""
+    from latters.draft import clean_body
+    out, _ = clean_body("सेवा में,\nजिलाधिकारी,\nवैशाली।\n\nपत्र का मुख्य भाग।")
+    assert "जिलाधिकारी" in out and "सेवा में" in out

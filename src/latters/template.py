@@ -47,6 +47,11 @@ MIN_CELL_SIZE = 8
 MAX_BOILERPLATE_CHARS = 120
 
 
+#: A run of Devanagari combining marks after one base character. Sorted,
+#: it makes ां and ंा compare equal -- see canonical().
+_MARK_RUN = re.compile(r"[\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962\u0963]{2,}")
+
+
 def canonical(line: str) -> str:
     """Normalise away the things that vary between two copies of one line.
 
@@ -62,7 +67,22 @@ def canonical(line: str) -> str:
     # canonical lines, both survive deduplication, and the assembled
     # letter carries its date twice.
     s = re.sub(r"\s*░\s*", "░", s)
-    return s.strip()
+
+    # Three more differences that are not differences, every one of them
+    # seen duplicated in a real mined letterhead:
+    #
+    #   ज्ञापांक / ज्ञापंाक       anusvara and matra typed in either order
+    #   महाशय,  / महाशय          trailing punctuation
+    #   अनु० यथोक्त। / अनु०यथोक्त।  a space that is there or is not
+    #
+    # The first is a genuine Devanagari trap: NFC does NOT reorder a
+    # combining mark against a matra, so the two spellings are distinct
+    # code point sequences that render identically. Sorting the marks that
+    # follow each consonant makes them compare equal. This is for the
+    # DEDUPE KEY only -- the line that gets printed is the original.
+    s = _MARK_RUN.sub(lambda m: "".join(sorted(m.group(0))), s)
+    s = s.replace(" ", "")
+    return s.strip(" ,।;:.\u0964")
 
 
 @dataclass

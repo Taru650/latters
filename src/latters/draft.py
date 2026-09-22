@@ -212,9 +212,41 @@ _DATE_LINE = re.compile(r"^\s*दिनांक\s*[:ः\-–]?.*$", re.M)
 _INLINE_NUM = re.compile(
     r"(?:पत्रांक|ज्ञापांक|पत्र\s*संख्या|स्मारांक)\s*[:ः\-–]?\s*[^\s,।]{1,30}")
 _SUBJECT_LINE = re.compile(r"^\s*विषय\s*[:ः\-–].*$", re.M)
+#: A trailing comma used to defeat this entirely. Gemma 3 wrote
+#: "धन्यवाद,\nभवदीय," and both survived, so the letter carried the model's
+#: closing AND the skeleton's -- two sign-offs, one letter. `[,।;:.\s]*`
+#: now absorbs the punctuation, and धन्यवाद is in the list: it is a normal
+#: way to end a message and never how this office ends a letter.
 _CLOSING_LINE = re.compile(
-    r"^\s*(?:विश्वासभाजन|भवदीय[ा]?|हस्ताक्षर(?:ित)?|अनु\s*[०0].*|प्रतिलिपि.*)\s*$", re.M)
+    r"^\s*(?:विश्वासभाजन|भवदीय[ा]?|भवदीया|धन्यवाद|सधन्यवाद|आपका\s+विश्वासभाजन"
+    r"|हस्ताक्षर(?:ित)?|अनु\s*[०0].*|प्रतिलिपि.*)[,।;:.\s]*$", re.M)
+#: The salutation is the skeleton's job, and the model gets it wrong. The
+#: first real draft opened `महोदय,` -- correct Hindi, and not this office's
+#: word: the archive has महाशय 356 times and महोदय zero. Leaving both in
+#: gives the letter two salutations, one of them in a register the office
+#: does not use. The addressee block above it is NOT stripped: `सेवा में,
+#: जिलाधिकारी, वैशाली` is content the model derived from the request, and
+#: assemble() already skips a skeleton line the body repeats.
+_SALUTATION_LINE = re.compile(
+    r"^\s*(?:महोदय[ा]?|महाशय[ा]?|श्रीमान[्]?|प्रिय\s+\S+)[,।\s]*$", re.M)
 _FENCE = re.compile(r"^\s*```.*$", re.M)
+
+#: Markdown in a government letter. A 1B model reaches for bullets and bold
+#: because that is what its training data looks like; the office's letters
+#: contain neither. Seen in the first real draft:
+#:     *   **कार्यक्षेत्र:** तराना कुमार के वर्तमान ...
+#: The heading survives, the asterisks do not.
+_MD_BULLET = re.compile(r"^\s*[*+\-]\s+", re.M)
+_MD_BOLD = re.compile(r"\*{1,3}(.+?)\*{1,3}")
+_MD_HEADING = re.compile(r"^\s*#{1,6}\s+", re.M)
+
+#: Fill-in-the-blank placeholders. The same draft ended with
+#: [आपका नाम] [आपका पद] [विभाग का नाम] [संपर्क नंबर] [ईमेल आईडी] --
+#: a signature block the model invented, below the one the skeleton
+#: supplies. Anything bracketed is a placeholder: the office's own letters
+#: use ( ) for parenthetical text and never [ ].
+_PLACEHOLDER = re.compile(r"^\s*[\[<][^\]>\n]{1,40}[\]>][,।\s]*$", re.M)
+_INLINE_PLACEHOLDER = re.compile(r"[\[<][^\]>\n]{1,40}[\]>]")
 
 
 def clean_body(text: str) -> tuple[str, list[str]]:
@@ -234,9 +266,19 @@ def clean_body(text: str) -> tuple[str, list[str]]:
             text = pattern.sub("", text)
 
     _strip(_FENCE, "code fence")
+    _strip(_MD_HEADING, "markdown heading")
+    _strip(_MD_BULLET, "markdown bullet")
+    if _MD_BOLD.search(text):
+        removed.append("markdown bold")
+        text = _MD_BOLD.sub(r"\g<1>", text)
+    _strip(_PLACEHOLDER, "placeholder line the model invented")
+    if _INLINE_PLACEHOLDER.search(text):
+        removed.append("inline placeholder")
+        text = _INLINE_PLACEHOLDER.sub("", text)
     _strip(_NUM_LINE, "invented letter-number line")
     _strip(_DATE_LINE, "invented date line")
     _strip(_SUBJECT_LINE, "duplicate subject line")
+    _strip(_SALUTATION_LINE, "salutation the skeleton supplies")
     _strip(_CLOSING_LINE, "closing block the skeleton supplies")
     if _INLINE_NUM.search(text):
         removed.append("inline letter number")
@@ -456,10 +498,19 @@ class DraftService:
 
         skeleton = self.skeletons.get((department or "", letter_type or ""))
         if skeleton is None:
-            warnings.append(
-                "no mined skeleton for this category, so the letterhead and "
-                "closing are generic. A skeleton needs 8+ past letters in the "
-                "same (department, type) cell.")
+            skeleton = self.skeletons.get(FALLBACK_CELL)
+            if skeleton is not None:
+                warnings.append(
+                    "no skeleton for this category, so the office-wide "
+                    "letterhead was used instead. A skeleton of its own needs "
+                    "8+ past letters in the same (department, type) cell -- "
+                    "check the addressee and the branch code by eye.")
+            else:
+                warnings.append(
+                    "no skeleton at all, so this draft has NO letterhead, "
+                    "letter number or date. Run `latters templates --db "
+                    "corpus.db -o skeletons`; if that mines nothing, the "
+                    "corpus is too small.")
 
         parts = build_prompt(request, exemplars, skeleton=skeleton,
                              subject=subject, budget=self.budget,
@@ -514,6 +565,12 @@ def build_service(store, llm, *, skeleton_overrides: str | None = None,
                         classifier=TrainedClassifier.fit(rows), **kw)
 
 
+#: Key for the office-wide skeleton used when a cell has too few letters
+#: to mine one of its own. Not a real (department, type) pair, and cannot
+#: collide with one: `classify` never produces an empty label.
+FALLBACK_CELL = ("", "")
+
+
 def load_skeletons(db, *, overrides: str | None = None
                    ) -> dict[tuple[str, str], Skeleton]:
     """Mine skeletons from a corpus database, keyed by cell.
@@ -536,6 +593,23 @@ def load_skeletons(db, *, overrides: str | None = None
         if dept and ltype:
             rows.append((r["text"], dept, ltype))
     mined = {(s.department, s.letter_type): s for s in mine_all(rows)}
+
+    # An OFFICE-WIDE fallback, mined across every letter regardless of cell.
+    #
+    # Without it, a request in a category with fewer than 8 past letters got
+    # no letterhead at all: no पत्रांक line, no दिनांक, no `सेवा में` block --
+    # just a subject, a body and a closing. A departmental letter without a
+    # letter number and a date is not a letter, whatever the body says.
+    #
+    # The warning shown in that case already claimed "the letterhead and
+    # closing are generic", which was simply untrue: there was no letterhead.
+    # This makes the warning honest. The office's letterhead barely varies
+    # between cells -- it is the same office -- so mining it across all of
+    # them is both safe and what the warning promised all along.
+    if rows:
+        office_wide = mine_all([(t, "", "") for t, _, _ in rows], min_cell=1)
+        if office_wide:
+            mined[FALLBACK_CELL] = office_wide[0]
     if overrides:
         from pathlib import Path as _Path
         from .template import load_overrides

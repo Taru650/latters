@@ -226,10 +226,15 @@ def test_mine_finds_shared_boilerplate():
                f"{b} का अद्वितीय मुख्य भाग यहाँ लिखा गया है।\nविश्वासभाजन"
                for b in bodies]
     sk = mine(letters, "राजस्व", "भूमि")
-    fixed = {c for c, _, _ in sk.boilerplate}
+    # Assert on the LITERAL -- element 2 -- not the canonical key. The key is
+    # for grouping only and is deliberately lossy: it folds away numbers,
+    # spacing, trailing punctuation and Devanagari mark order, so a mined
+    # letterhead does not carry `ज्ञापांक` and `ज्ञापंाक` as two lines. What
+    # gets printed is the original text, and that is what must be right.
+    fixed = {lit for _, _, lit in sk.boilerplate}
     assert "कार्यालय जिला राजस्व शाखा" in fixed
     assert "विश्वासभाजन" in fixed
-    assert not any("अद्वितीय" in c for c in fixed)   # the varying body is not boilerplate
+    assert not any("अद्वितीय" in lit for lit in fixed)  # varying body is not boilerplate
     assert 0 < sk.coverage < 1
 
 
@@ -337,3 +342,25 @@ def test_the_shipped_classifier_never_emits_the_rare_bucket():
     assert clf.department is not None
     assert "अन्य" not in clf.department.classes
     assert "निर्वाचन" not in clf.department.classes
+
+
+def test_canonical_folds_the_three_differences_that_are_not_differences():
+    """All three were duplicated in a real mined letterhead.
+
+    `ज्ञापांक` against `ज्ञापंाक` is the one that matters: NFC does NOT
+    reorder a combining mark against a matra, so two spellings that render
+    identically are distinct code point sequences, and both survived
+    deduplication into the printed letter.
+    """
+    from latters.template import canonical
+    for a, b in (("ज्ञापांक", "ज्ञापंाक"),
+                 ("महाशय,", "महाशय"),
+                 ("अनु० यथोक्त।", "अनु०यथोक्त।"),
+                 ("सारण, छपरा।", "सारण, छपरा")):
+        assert canonical(a) == canonical(b), f"{a!r} vs {b!r}"
+
+
+def test_canonical_does_not_fold_genuinely_different_lines():
+    from latters.template import canonical
+    assert canonical("विषय") != canonical("महाशय")
+    assert canonical("सेवा में") != canonical("प्रेषक")
