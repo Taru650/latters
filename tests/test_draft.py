@@ -351,13 +351,23 @@ def test_missing_skeleton_directory_is_an_error_not_a_silent_no_op():
             load_skeletons(store.db, overrides="/no/such/dir")
 
 
-def test_empty_skeleton_directory_is_an_error(tmp_path):
+def test_a_directory_of_non_skeletons_is_not_an_error(tmp_path):
+    """CONTRACT CHANGED. This used to raise, and that was wrong: an empty
+    or skeleton-free directory is the normal state of a small office --
+    `templates` writes nothing until a cell has 8+ letters -- and raising
+    meant it could not draft at all. Files that ARE skeletons and cannot
+    be parsed still raise; see test_unreadable_skeleton_files_...
+    """
+    import warnings
     from latters.draft import load_skeletons
     (tmp_path / "notes.txt").write_text("not a skeleton", encoding="utf-8")
     store, _ = _service(StubLLM())
     with store:
-        with pytest.raises(ValueError, match="no readable skeletons"):
-            load_skeletons(store.db, overrides=str(tmp_path))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sk = load_skeletons(store.db, overrides=str(tmp_path))
+        assert any("is empty" in str(w.message) for w in caught)
+        assert isinstance(sk, dict)
 
 
 def test_packaged_gold_set_is_found_without_a_source_checkout():
@@ -432,3 +442,71 @@ def test_the_addressee_block_is_NOT_stripped():
     from latters.draft import clean_body
     out, _ = clean_body("सेवा में,\nजिलाधिकारी,\nवैशाली।\n\nपत्र का मुख्य भाग।")
     assert "जिलाधिकारी" in out and "सेवा में" in out
+
+
+# --- an empty skeleton directory is not a broken one ----------------------
+def test_an_empty_skeleton_directory_warns_and_carries_on(tmp_path):
+    """`templates` writes nothing until a cell has 8+ letters, so a small
+    office's skeletons/ is legitimately empty -- and refusing there meant
+    it could not draft at all, with the skeletons mined from the database
+    (including the office-wide fallback) sitting unused."""
+    import warnings
+    from latters.draft import FALLBACK_CELL, load_skeletons
+    from latters.store import LetterRow, Store
+
+    empty = tmp_path / "skeletons"
+    empty.mkdir()
+    with Store(tmp_path / "c.db") as store:
+        store.add([LetterRow(source_file="a.docx", seq=i,
+                             text="कार्यालय जिला पदाधिकारी, सारण।\n"
+                                  f"विषय: जाँच {i}।\nमहाशय,\n"
+                                  f"मुख्य भाग {i}।\nविश्वासभाजन")
+                   for i in range(12)])
+        store.db.execute("UPDATE letters SET department='राजस्व', "
+                         "letter_type='जाँच'")
+        store.db.commit()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sk = load_skeletons(store.db, overrides=str(empty))
+        assert any("is empty" in str(w.message) for w in caught)
+    assert FALLBACK_CELL in sk, "the office-wide letterhead must survive"
+
+
+def test_unreadable_skeleton_files_are_still_an_error(tmp_path):
+    """The opposite case must stay hard: the clerk edited these, and
+    silently ignoring their work is the failure the guard exists for."""
+    import pytest as _pytest
+    from latters.draft import load_skeletons
+    from latters.store import LetterRow, Store
+
+    bad = tmp_path / "skeletons"
+    bad.mkdir()
+    (bad / "broken.md").write_text("no heading, no sections\n", encoding="utf-8")
+    with Store(tmp_path / "c.db") as store:
+        store.add([LetterRow(source_file="a.docx", seq=1, text="पत्र")])
+        with _pytest.raises(ValueError, match="none could be read"):
+            load_skeletons(store.db, overrides=str(bad))
+
+
+def test_the_office_wide_fallback_supplies_a_letterhead(tmp_path):
+    """The headers bug: with no skeleton for the cell the draft used to get
+    a subject, a body and a closing -- no पत्रांक, no दिनांक, no addressee
+    block -- while the warning claimed the letterhead was 'generic'."""
+    from latters.draft import FALLBACK_CELL, load_skeletons
+    from latters.store import LetterRow, Store
+
+    with Store(tmp_path / "c.db") as store:
+        store.add([LetterRow(source_file="a.docx", seq=i,
+                             text="कार्यालय जिला पदाधिकारी, सारण।\n"
+                                  "पत्रांक- ----------/रा०\n"
+                                  f"विषय: जाँच {i}।\nमहाशय,\n"
+                                  f"मुख्य भाग {i}।\nविश्वासभाजन")
+                   for i in range(12)])
+        store.db.execute("UPDATE letters SET department='राजस्व', "
+                         "letter_type='जाँच'")
+        store.db.commit()
+        sk = load_skeletons(store.db)
+
+    fallback = sk[FALLBACK_CELL]
+    head = "\n".join(fallback.before_subject())
+    assert "कार्यालय" in head, "no letterhead in the office-wide skeleton"

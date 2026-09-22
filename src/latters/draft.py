@@ -620,10 +620,34 @@ def load_skeletons(db, *, overrides: str | None = None
                 f"no skeleton directory at {overrides}. Create one with: "
                 "latters templates --db <db> -o <dir>")
         loaded = load_overrides(overrides)
+        # An EMPTY directory and a directory full of unreadable files are
+        # different problems and used to raise the same error.
+        #
+        # Empty is the normal state of a small office: `templates` writes
+        # nothing until a cell reaches 8 letters, so a corpus of 48 letters
+        # spread over six categories produces zero files -- and refusing
+        # here meant that office could not draft at all, even though the
+        # skeletons mined from the database above, including the
+        # office-wide fallback, were sitting right there unused.
+        #
+        # Files that exist and cannot be parsed stay an error: the clerk
+        # edited them, and silently ignoring that work is the failure this
+        # guard was written for.
         if not loaded:
-            raise ValueError(
-                f"{overrides} contains no readable skeletons. They are the "
-                "*.md files written by `latters templates -o`, and each needs "
-                "its `# department / type` heading intact.")
+            present = [f for f in _Path(overrides).glob("*.md")]
+            if present:
+                raise ValueError(
+                    f"{overrides} holds {len(present)} .md file(s) and none "
+                    "could be read. Each needs its `# department / type` "
+                    "heading and the `## above the subject line` / "
+                    "`## below the body` sections intact.")
+            # Empty: say so, carry on with what was mined.
+            import warnings as _w
+            _w.warn(
+                f"{overrides} is empty, so the letterhead comes from the "
+                f"corpus rather than from any corrected file. `latters "
+                f"templates -o {overrides}` writes nothing until a "
+                f"(department, type) cell has 8+ letters.",
+                stacklevel=2)
         mined.update(loaded)
     return mined
