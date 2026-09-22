@@ -9,6 +9,7 @@
     latters gold extract ARCHIVE -o DIR  mine review sheet from the archive
     latters gold collect REVIEW.tsv      turn a filled sheet into a gold file
     latters gold coverage                which mapping slots are untested
+    latters gold auto --docx A --pdf B   check the mapping against OCR
     latters gold run                     the regression (same as `fonts gold`)
 
     latters segment ARCHIVE --db X.db    convert, split into letters, score, store
@@ -848,6 +849,31 @@ def cmd_draft(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+def cmd_gold_auto(args: argparse.Namespace) -> int:
+    """Check the mapping tables against OCR, with no Hindi reader.
+
+    Needs a PDF exported from the SAME .docx on a machine where the legacy
+    fonts are installed -- Word renders the glyphs, Tesseract reads them,
+    and the result never touches the mapping table. See goldauto.py.
+    """
+    from .goldauto import from_files
+
+    for label, path in (("docx", args.docx), ("pdf", args.pdf)):
+        if not Path(path).exists():
+            print(f"no such {label}: {path}", file=sys.stderr)
+            return 2
+
+    result = from_files(Path(args.docx), Path(args.pdf),
+                        latin_digits=args.latin_digits)
+    print(result.render(show=args.show))
+    for note in result.notes:
+        print(f"\n  note: {note}")
+    # Non-zero on a repeated disagreement: that is a mapping bug until a
+    # Hindi reader says otherwise, and it should fail a check, not decorate
+    # one.
+    return 1 if result.systematic or result.agreement < 0.90 else 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Why does it not work yet? One command, in failure order.
 
@@ -1146,6 +1172,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     gold = sub.add_parser("gold", help="build and audit the gold set")
     gsub = gold.add_subparsers(dest="subcommand", required=True)
+
+    ga = gsub.add_parser(
+        "auto", help="check the mapping against OCR, no Hindi reader needed")
+    ga.add_argument("--docx", required=True, help="one legacy-font letter")
+    ga.add_argument("--pdf", required=True,
+                    help="the SAME letter, exported to PDF from Word on a "
+                         "machine with the legacy fonts installed")
+    ga.add_argument("--latin-digits", action="store_true")
+    ga.add_argument("--show", type=int, default=25)
+    ga.set_defaults(func=cmd_gold_auto)
 
     ge = gsub.add_parser("extract", help="mine a review sheet from the archive")
     ge.add_argument("archive")

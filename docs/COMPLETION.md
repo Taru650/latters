@@ -29,8 +29,9 @@ installer has never run on Windows.
 | Three scorecards | refuse to report a number they do not have |
 | Backup | SQLite backup API + integrity check, not a file copy |
 | `latters doctor` | every external dependency, with the fix for each |
+| `latters gold auto` | mapping vs OCR, no Hindi reader needed |
 
-411 tests. That is a statement about the code, not about the Hindi.
+418 tests. That is a statement about the code, not about the Hindi.
 
 ## Not done, and only you can do it
 
@@ -58,6 +59,39 @@ latters scorecard --db corpus.db
 
 Cost: about two hours of one person who reads Hindi. There is nothing else
 on this list of comparable value.
+
+#### Do this thirty-second thing first
+
+Three routes to checking the conversion *without* a Hindi reader were tried
+and closed: the real Kruti Dev fonts are not reachable from the development
+environment; a font synthesised from the mapping table would only confirm
+the table against itself; and the archive contains **488,928 legacy
+characters and zero Unicode Devanagari**, so there is no free parallel text.
+
+The fourth route works, and it needs thirty seconds of anyone's time:
+
+1. Open **one** legacy `.docx` in Word, on the office machine where the
+   Kruti Dev and DevLys fonts **are** installed.
+2. Export it to PDF. Word renders the legacy glyphs correctly because it
+   has the font.
+3. Run:
+
+```
+latters gold auto --docx archive\that_letter.docx --pdf that_letter.pdf
+```
+
+OCR reads the rendered glyphs and produces Hindi **without consulting the
+mapping table at all**. Two independent readings of the same letter. Where
+they agree, the mapping is almost certainly right — two unrelated methods do
+not make the same mistake. Where they disagree **repeatedly**, that is a
+mapping bug: OCR errors are scattered, a wrong table slot is wrong on every
+single occurrence.
+
+It does not replace the gold set — OCR has its own 2–4% error rate and
+cannot say which side is right. It **localises**. It turns "review 200 blind
+lines of Hindi" into "adjudicate these fifteen words", which is minutes
+instead of hours, and it catches exactly the systematic errors that matter
+most. Do it before the full review; it may tell you where to concentrate.
 
 ### 2. Run a model, once
 

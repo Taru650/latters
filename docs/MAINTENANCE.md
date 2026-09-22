@@ -215,7 +215,28 @@ automatically. That is how `Î` → ट्ट and `Ök` → झ were found; see
 `PHASE2_FINDINGS.md`.
 
 This cannot find a character mapped to the *wrong* Devanagari, because the
-output is well-formed Hindi either way. Only the gold set does that.
+output is well-formed Hindi either way. Only the gold set does that — or
+`latters gold auto`, which gets most of the way there for free.
+
+### Checking the mapping without a Hindi reader
+
+`goldauto.py`. Export one legacy `.docx` to PDF from Word on a machine that
+has the fonts; Word renders the glyphs, Tesseract reads them, and the result
+never touches the mapping table. Two independent readings of one letter:
+
+```
+latters gold auto --docx archive/letter.docx --pdf letter.pdf
+```
+
+A **repeated** disagreement is a mapping bug — OCR noise is scattered, a
+wrong slot is wrong every time. Exits non-zero on one. It cannot say which
+side is right (OCR has its own 2–4% error), so it localises rather than
+adjudicates.
+
+Three cheaper routes were tried and closed, recorded so nobody retries them:
+the real Kruti Dev fonts were unreachable; a font synthesised from the
+mapping table is circular; and the archive holds 488,928 legacy characters
+and **zero** Unicode Devanagari, so there is no free parallel text.
 
 ## Things that will bite you
 
