@@ -155,3 +155,67 @@ def test_a_healthy_install_exits_zero(tmp_path):
                 for i in range(40)])
     report = doctor.run(db=str(db), skeletons=str(sk), stub=True)
     assert not report.blocking, [c.name for c in report.blocking]
+
+
+# --- the 1B/4B decision should be measured, not guessed from a blog post ---
+class _Resp:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def read(self) -> bytes:
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _fake_tags(monkeypatch, size_bytes: int, free_mb: float | None):
+    import json
+    import urllib.request
+
+    from latters import llm
+
+    payload = json.dumps(
+        {"models": [{"name": "gemma3:4b-it-qat", "size": size_bytes}]}
+    ).encode()
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *a, **k: _Resp(payload))
+    monkeypatch.setattr(llm.Ollama, "available", lambda self: True)
+    monkeypatch.setattr(doctor, "_free_memory_mb", lambda: free_mb)
+
+
+def test_a_model_that_does_not_fit_in_free_ram_is_a_warning(monkeypatch):
+    """8 GB, single channel, spinning disk. A 3 GB model with 3.2 GB free
+    does not fail -- it pages, and paging to an 11 MB/s disk is minutes per
+    letter. Saying 'ok' there sends the clerk looking for a bug that is
+    really a memory shortage."""
+    _fake_tags(monkeypatch, 3_000_000_000, 3_200.0)
+    r = doctor.Report()
+    doctor._ollama(r, "gemma3:4b-it-qat", "http://x", stub=False)
+    c = _by_name(r)["model"]
+    assert c.status == doctor.WARN and c.optional and not c.blocking
+    assert "3.0 GB" in c.detail and "3.2 GB free" in c.detail
+    assert "num-ctx" in (c.fix or "")
+
+
+def test_a_model_that_fits_reports_its_size_and_passes(monkeypatch):
+    _fake_tags(monkeypatch, 3_000_000_000, 6_000.0)
+    r = doctor.Report()
+    doctor._ollama(r, "gemma3:4b-it-qat", "http://x", stub=False)
+    c = _by_name(r)["model"]
+    assert c.status == doctor.OK
+    assert "3.0 GB" in c.detail
+
+
+def test_an_unmeasurable_memory_does_not_invent_a_verdict(monkeypatch):
+    """Windows without ctypes, or a locked-down box. Report the size, say
+    nothing about headroom -- a guess here is worse than a silence."""
+    _fake_tags(monkeypatch, 3_000_000_000, None)
+    r = doctor.Report()
+    doctor._ollama(r, "gemma3:4b-it-qat", "http://x", stub=False)
+    c = _by_name(r)["model"]
+    assert c.status == doctor.OK
+    assert "free" not in c.detail

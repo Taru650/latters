@@ -986,11 +986,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from .web.app import create_app
 
     app = create_app(db=args.db, skeletons=args.skeletons, model=args.model,
-                     host=args.ollama, stub=args.stub, exports=args.exports)
+                     host=args.ollama, stub=args.stub, exports=args.exports,
+                     num_ctx=args.num_ctx)
     print(f"  drafting page   http://{args.bind}:{args.port}/")
     print(f"  admin page      http://{args.bind}:{args.port}/admin")
     print(f"  corpus          {args.db}")
-    print(f"  model           {'stub (no LLM)' if args.stub else args.model}")
+    print(f"  model           {'stub (no LLM)' if args.stub else args.model}"
+          + (f"  ({args.num_ctx}-token context)" if args.num_ctx else ""))
     if args.bind not in ("127.0.0.1", "localhost"):
         print("\n!! Bound to a non-loopback address. This application has no\n"
               "!! authentication and the corpus is official correspondence.\n"
@@ -1321,6 +1323,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="loopback by default: there is no authentication")
     sv.add_argument("--port", type=int, default=8765)
     sv.add_argument("--log-level", default="warning")
+    sv.add_argument("--num-ctx", type=int, default=None,
+                    help="context window; lower it (e.g. 2048) to fit a "
+                         "bigger model in less RAM")
     sv.add_argument("--stub", action="store_true",
                     help="serve without an LLM; everything else works")
     sv.set_defaults(func=cmd_serve)

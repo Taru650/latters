@@ -255,6 +255,51 @@ plausible draft and a wrong letter leaving the office.
 PDF export needs LibreOffice. If it fails, export DOCX and print to PDF from
 Word; the letter is identical either way.
 
+## Step 6c — is `gemma3:4b-it-qat` worth it?
+
+Nothing in the code cares which model you use — `--model` is a flag on
+`draft`, `serve` and `doctor`, and Gemma 3 1B and 4B share a tokenizer, so
+the words-per-second arithmetic in `PHASE0_FINDINGS.md` carries straight
+over. The only question is whether 8 GB has room.
+
+Measure it rather than guess:
+
+```powershell
+ollama pull gemma3:4b-it-qat
+latters doctor --model gemma3:4b-it-qat
+```
+
+The `model` line now prints the model's size and the free RAM beside it. If
+it warns, Windows will page the weights to disk, and on an 11–27 MB/s
+spinning disk that is minutes per letter, not seconds.
+
+Three things buy headroom, cheapest first: close the browser while drafting,
+drop the context window, and fit the second memory module.
+
+```powershell
+latters draft "<request>" --db corpus.db --skeletons skeletons `
+    --model gemma3:4b-it-qat --num-ctx 2048
+latters serve --db corpus.db --skeletons skeletons `
+    --model gemma3:4b-it-qat --num-ctx 2048
+```
+
+`--num-ctx` sets the window on the model *and* on the prompt builder. That
+matters: Ollama truncates an over-long prompt from the front, silently, and
+the front is where the letterhead and the retrieved examples are. The prompt
+builder drops whole exemplars instead and the draft page tells you which.
+
+What to expect, and the honest part: decode speed is limited by memory
+bandwidth, so ~2.6 GB of Q4 weights over this machine's ~14.6 GB/s puts the
+4B near **5 tokens/s — about 2.5 Hindi words/s, roughly 3.5× slower** than
+the 1B's measured 9.05. That much is arithmetic. Whether the Hindi is
+actually *better* has never been measured by anyone on this project, on
+either model. Draft the same letter twice, once with each, and read them.
+`--num-ctx 2048` truncates the retrieved examples first, so if the draft
+loses the office's phrasing rather than its grammar, that is the cause.
+
+Pick `gemma3:4b-it-qat`, not plain `gemma3:4b`: the QAT build was trained
+against its own int4 quantisation and holds quality that a naive Q4 loses.
+
 ## Step 7 — correct the skeletons (30 minutes, once)
 
 Open each file in `skeletons\`. They have two sections, `## above the

@@ -344,3 +344,39 @@ def test_an_abandoned_draft_is_still_counted(client):
     client.post("/api/draft", json={"request": "एक और पत्र चाहिए यहाँ"})
     after = Store(client.db).draft_stats()
     assert after["generated"] == before + 1 and after["abandoned"] >= 1
+
+
+# --- a smaller context window has to reach both halves --------------------
+def test_num_ctx_reaches_the_prompt_builder_and_the_model(tmp_path):
+    """Setting it only on Ollama would be worse than not setting it.
+
+    Ollama truncates an over-long prompt from the FRONT, which is where the
+    letterhead and the retrieved examples live, and it does so silently. The
+    Budget drops whole exemplars instead and the draft records which ones.
+    So the flag is only safe if the prompt builder knows about it too.
+    """
+    from latters.llm import Ollama
+    from latters.web.app import create_app
+
+    db = tmp_path / "corpus.db"
+    Store(db).close()
+    app = create_app(db=db, skeletons=tmp_path / "sk",
+                     exports=tmp_path / "exports", num_ctx=2048)
+    ws = app.state.ws
+    assert ws.budget.context == 2048
+    assert isinstance(ws.llm, Ollama)
+    assert ws.llm.options["num_ctx"] == 2048
+    ws.close()
+
+
+def test_the_default_context_is_untouched(tmp_path):
+    from latters.draft import Budget
+    from latters.web.app import create_app
+
+    db = tmp_path / "corpus.db"
+    Store(db).close()
+    app = create_app(db=db, skeletons=tmp_path / "sk",
+                     exports=tmp_path / "exports")
+    ws = app.state.ws
+    assert ws.budget.context == Budget().context
+    ws.close()

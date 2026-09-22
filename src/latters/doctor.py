@@ -119,25 +119,12 @@ def _console_encoding(r: Report) -> None:
                   "Run  chcp 65001  first, or use the web pages instead.")
 
 
-def _disk_and_memory(r: Report, db: Path) -> None:
-    try:
-        usage = shutil.disk_usage(db.parent if db.parent.exists() else Path.cwd())
-        free_mb = usage.free / 1e6
-        if free_mb < 500:
-            r.add("free disk", FAIL, f"{free_mb:.0f} MB",
-                  fix="Under 500 MB free. The corpus, the model and the "
-                      "exports all need room.")
-        else:
-            r.add("free disk", OK, f"{free_mb / 1000:.1f} GB")
-    except OSError as exc:
-        r.add("free disk", WARN, str(exc), optional=True)
-
-    # Free RAM, without psutil: it is not a dependency this project will add.
-    free_mb = None
+def _free_memory_mb() -> float | None:
+    """Free RAM, without psutil: not a dependency this project will add."""
     if hasattr(os, "sysconf") and "SC_AVPHYS_PAGES" in os.sysconf_names:
-        free_mb = (os.sysconf("SC_AVPHYS_PAGES")
-                   * os.sysconf("SC_PAGE_SIZE") / 1e6)
-    elif sys.platform == "win32":
+        return (os.sysconf("SC_AVPHYS_PAGES")
+                * os.sysconf("SC_PAGE_SIZE") / 1e6)
+    if sys.platform == "win32":
         try:
             import ctypes
 
@@ -155,10 +142,26 @@ def _disk_and_memory(r: Report, db: Path) -> None:
             ms = _MS()
             ms.dwLength = ctypes.sizeof(_MS)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
-            free_mb = ms.ullAvailPhys / 1e6
+            return ms.ullAvailPhys / 1e6
         except Exception:
-            free_mb = None
+            return None
+    return None
 
+
+def _disk_and_memory(r: Report, db: Path) -> None:
+    try:
+        usage = shutil.disk_usage(db.parent if db.parent.exists() else Path.cwd())
+        free_mb = usage.free / 1e6
+        if free_mb < 500:
+            r.add("free disk", FAIL, f"{free_mb:.0f} MB",
+                  fix="Under 500 MB free. The corpus, the model and the "
+                      "exports all need room.")
+        else:
+            r.add("free disk", OK, f"{free_mb / 1000:.1f} GB")
+    except OSError as exc:
+        r.add("free disk", WARN, str(exc), optional=True)
+
+    free_mb = _free_memory_mb()
     if free_mb is None:
         r.add("free memory", WARN, "could not measure", optional=True)
     elif free_mb < MIN_FREE_MB:
@@ -249,7 +252,30 @@ def _ollama(r: Report, model: str, host: str, *, stub: bool) -> None:
 
     names = {m.get("name", "") for m in tags.get("models", [])}
     if client.available():
-        r.add("model", OK, model)
+        # Report the SIZE, and whether it leaves room. On an 8 GB
+        # single-channel machine the difference between the 1B and the 4B
+        # is the difference between working and paging a 3 GB model to a
+        # spinning disk -- and that is not a judgement anyone should have
+        # to make from a blog post about someone else's laptop.
+        size_gb = next((m.get("size", 0) / 1e9 for m in tags.get("models", [])
+                        if m.get("name", "") in (model, f"{model}:latest")), 0)
+        detail = f"{model}" + (f"  {size_gb:.1f} GB" if size_gb else "")
+        free = _free_memory_mb()
+        if size_gb and free is not None:
+            # The model is already resident if it was loaded, so this is a
+            # lower bound on the squeeze, not an upper one.
+            spare = free / 1000 - size_gb
+            detail += f", {free / 1000:.1f} GB free now"
+            if spare < 0.5:
+                r.add("model", WARN, detail, optional=True,
+                      fix=f"This model needs about {size_gb:.1f} GB and there "
+                          f"is {free / 1000:.1f} GB free.\n"
+                          f"Windows will page it to disk, and on a spinning "
+                          f"disk that is minutes, not seconds.\n"
+                          f"Close the browser, or drop --num-ctx to 2048, or "
+                          f"fit the second memory module.")
+                return
+        r.add("model", OK, detail)
     else:
         have = ", ".join(sorted(names)[:4]) or "none"
         r.add("model", FAIL, f"{model} not installed (have: {have})",

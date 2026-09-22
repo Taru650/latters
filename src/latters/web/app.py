@@ -75,11 +75,13 @@ class Workspace:
     """
 
     def __init__(self, db_path: Path, skeleton_dir: Path, llm: LLM,
-                 *, template_docx: Path | None = None):
+                 *, template_docx: Path | None = None,
+                 budget: Budget | None = None):
         self.db_path = Path(db_path)
         self.skeleton_dir = Path(skeleton_dir)
         self.llm = llm
         self.template_docx = template_docx
+        self.budget = budget or Budget()
         self._store: Store | None = None
         self._service: DraftService | None = None
         self._dirty = True
@@ -139,7 +141,7 @@ class Workspace:
             self._service = DraftService(
                 retriever=retriever, llm=self.llm,
                 skeletons=load_skeletons(self.store.db, overrides=overrides),
-                classifier=TrainedClassifier.fit(rows), budget=Budget())
+                classifier=TrainedClassifier.fit(rows), budget=self.budget)
             self._dirty = False
         return self._service
 
@@ -153,14 +155,24 @@ def create_app(db: str | Path = "corpus.db",
                skeletons: str | Path = "skeletons",
                *, model: str = "gemma3:1b", host: str = "http://127.0.0.1:11434",
                stub: bool = False, template_docx: str | Path | None = None,
-               exports: str | Path = "exports") -> FastAPI:
+               exports: str | Path = "exports",
+               num_ctx: int | None = None) -> FastAPI:
+    # num_ctx has to reach BOTH the model and the prompt builder or it does
+    # nothing useful. Ollama silently truncates a prompt that overruns the
+    # context -- from the front, which is where the retrieved examples and
+    # the letterhead are -- so a smaller window set only on the model loses
+    # exactly the material the draft is built from, without saying so. The
+    # Budget drops whole exemplars instead, and the draft reports which.
+    budget = Budget(context=num_ctx) if num_ctx else Budget()
+    options = {"num_ctx": num_ctx} if num_ctx else None
     llm: LLM = StubLLM(
         reply="उपर्युक्त विषय के प्रसंग में कहना है कि आवश्यक कार्यवाही "
               "सुनिश्चित करते हुए प्रतिवेदन इस कार्यालय को उपलब्ध कराएँ।"
-    ) if stub else Ollama(model, host=host)
+    ) if stub else Ollama(model, host=host, options=options)
 
     ws = Workspace(Path(db), Path(skeletons), llm,
-                   template_docx=Path(template_docx) if template_docx else None)
+                   template_docx=Path(template_docx) if template_docx else None,
+                   budget=budget)
     export_dir = Path(exports)
     export_dir.mkdir(parents=True, exist_ok=True)
 
